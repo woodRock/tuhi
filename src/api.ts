@@ -172,3 +172,57 @@ export const tauraReport = (root: string) => invoke<TauraReport | null>("taura_r
 
 /** `taura trace` for a \res key, an artifact name or file.tex:LINE. */
 export const tauraTrace = (root: string, target: string) => invoke<Record<string, any>>("taura_trace", { root, target });
+
+export interface BibEntry {
+  key: string;
+  /** Root-relative .bib file. */
+  file: string;
+  line: number;
+  title: string;
+  author: string;
+  year: string;
+}
+
+export interface RuruPaper {
+  key: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  venue: string | null;
+  status: string;
+  tags: string[];
+  /** Kept for this paper's ruru project. */
+  in_project: boolean;
+}
+
+export interface CitationLibrary {
+  bib: BibEntry[];
+  /** Whether ruru is installed. */
+  ruru: boolean;
+  /** The ruru project this folder belongs to. */
+  project: string | null;
+  papers: RuruPaper[];
+}
+
+/** `ruru check --json`; see ruru's docs/json.md. */
+export interface RuruCheck {
+  project: string | null;
+  bib: string | null;
+  cited: number;
+  issues: {
+    missing?: { key: string; in_library: boolean }[];
+    unused?: string[];
+    kept_unused?: string[];
+    stale?: string[];
+    duplicates?: string[][];
+  };
+  warnings: string[];
+}
+
+export const citationLibrary = (root: string, files: string[]) => invoke<CitationLibrary>("citation_library", { root, files });
+
+/** `ruru show KEY --json`: the paper with abstract, notes and agent_notes. */
+export const ruruShow = (key: string) => invoke<Record<string, any>>("ruru_show", { key });
+
+/** null when ruru isn't installed. */
+export const ruruCheck = (root: string, main: string) => invoke<RuruCheck | null>("ruru_check", { root, main });

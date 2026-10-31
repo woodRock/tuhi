@@ -72,6 +72,21 @@ the data, and when it was published (`taura trace`). The **Provenance** tab list
 findings and what `taura publish` would change. tuhi only reads: it runs taura's CLI with
 `--json` after each compile and never writes to the ledger.
 
+### Citations (ruru)
+
+- Inside `\cite{…}` (and `\citep`, `\textcite`, `\parencite`, …) completion offers the keys in
+  the paper's `.bib` files first, then papers kept for this paper's ruru project, then the rest
+  of your ruru library. Type part of a key, a title word or an author.
+- Hover a cited key for its title, authors and where it's defined (click to jump to the `.bib`
+  entry). For library papers the card also shows your notes, the abstract and agent notes
+  (`ruru show`).
+- A cited key that no `.bib` defines is underlined: amber if it's in your library (the card and
+  message give the command that adds it, `ruru check PROJECT --fix`), red if it's nowhere.
+- After each compile `ruru check` adds stale, duplicate and unused `.bib` entries to Problems.
+
+tuhi only reads the library. Commands that change it or the `.bib` are shown for you to run.
+Without ruru, completion, hover and the missing-key check still work from the `.bib` files.
+
 Build output goes to the app's cache folder, never into the paper's repo. Uses `latexmk` when
 installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelatex` picks the engine.
 
@@ -87,4 +102,5 @@ installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelate
 ```bash
 cd src-tauri && cargo test
 TUHI_TEST_PROJECT=~/overleaf/trust-align cargo test -- --ignored --nocapture
+TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored --nocapture
 ```

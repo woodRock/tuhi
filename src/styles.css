@@ -870,3 +870,72 @@ button.primary {
   margin: 0;
   word-break: break-word;
 }
+
+/* Citation hover and completion info */
+.cite-card {
+  max-width: 420px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cite-key {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--muted);
+}
+
+.cite-title {
+  font-weight: 600;
+  margin: 2px 0;
+}
+
+.cite-meta {
+  color: var(--muted);
+}
+
+.cite-where {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--accent);
+}
+
+.cite-advice {
+  margin-top: 6px;
+}
+
+.cite-command {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.cite-command code {
+  flex: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  user-select: all;
+}
+
+.cite-command button {
+  font-size: 11px;
+}
+
+.cite-label {
+  margin-top: 6px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.cite-text {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.cm-tooltip-hover .cite-card {
+  max-height: 50vh;
+  overflow: auto;
+}

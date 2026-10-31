@@ -1,11 +1,12 @@
 import { basicSetup } from "codemirror";
-import { Decoration, DecorationSet, EditorView, GutterMarker, gutter, keymap } from "@codemirror/view";
-import { Compartment, EditorState, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, DecorationSet, EditorView, GutterMarker, gutter, hoverTooltip, keymap } from "@codemirror/view";
+import { Compartment, EditorState, Extension, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
-import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
+import { Diagnostic, forceLinting, lintGutter, linter } from "@codemirror/lint";
 import { oneDark } from "@codemirror/theme-one-dark";
+import type { Citations } from "./citations";
 import type { Marker } from "./provenance";
 
 export interface EditorHooks {
@@ -15,6 +16,12 @@ export interface EditorHooks {
   onForwardSync(line: number, column: number): void;
   /** A provenance dot in the gutter was clicked. */
   onMarkerClick(marker: Marker, x: number, y: number): void;
+}
+
+export interface Problem {
+  line: number;
+  severity: "error" | "warning" | "info";
+  message: string;
 }
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -86,9 +93,11 @@ export class Editor {
   private dirty = new Set<string>();
   private theme = new Compartment();
   private flashTimer = 0;
+  /** Compile problems per file, shown alongside the citation checks. */
+  private problems = new Map<string, Problem[]>();
   file: string | null = null;
 
-  constructor(parent: HTMLElement, private hooks: EditorHooks) {
+  constructor(parent: HTMLElement, private hooks: EditorHooks, private citations: Citations) {
     this.view = new EditorView({
       parent,
       state: EditorState.create({ doc: "", extensions: [EditorState.readOnly.of(true), this.theme.of(themeFor(darkQuery.matches))] }),
@@ -106,14 +115,22 @@ export class Editor {
     darkQuery.addEventListener("change", (e) => this.setDark(e.matches));
   }
 
-  private makeState(text: string): EditorState {
+  private makeState(file: string, text: string): EditorState {
+    const tex: Extension = file.endsWith(".tex")
+      ? [
+          EditorState.languageData.of(() => [{ autocomplete: this.citations.complete }]),
+          hoverTooltip(this.citations.hover, { hoverTime: 350 }),
+        ]
+      : [];
     return EditorState.create({
       doc: text,
       extensions: [
         basicSetup,
         StreamLanguage.define(stex),
         EditorView.lineWrapping,
+        tex,
         lintGutter(),
+        linter((view) => this.diagnostics(file, view), { delay: 400 }),
         markerField,
         gutter({
           class: "cm-provenance",
@@ -152,6 +169,24 @@ export class Editor {
     });
   }
 
+  /** Compile problems for the file plus, in .tex files, cited keys no .bib defines. */
+  private diagnostics(file: string, view: EditorView): Diagnostic[] {
+    const doc = view.state.doc;
+    const out: Diagnostic[] = (this.problems.get(file) ?? [])
+      .filter((p) => p.line >= 1 && p.line <= doc.lines)
+      .map((p) => {
+        const line = doc.line(p.line);
+        return { from: line.from, to: line.to, severity: p.severity, message: p.message };
+      });
+    if (file.endsWith(".tex")) out.push(...this.citations.lint(doc.toString()));
+    return out;
+  }
+
+  /** Re-runs the checks, e.g. once the citation library has loaded. */
+  relint() {
+    if (this.file) forceLinting(this.view);
+  }
+
   private syncAt(pos: number) {
     const line = this.view.state.doc.lineAt(pos);
     this.hooks.onForwardSync(line.number, pos - line.from + 1);
@@ -168,6 +203,7 @@ export class Editor {
   /** Forgets every open file, e.g. when switching projects. */
   reset() {
     this.states.clear();
+    this.problems.clear();
     this.saved.clear();
     this.dirty.clear();
     this.file = null;
@@ -182,7 +218,7 @@ export class Editor {
 
   /** Adds a file read from disk. */
   load(file: string, text: string) {
-    this.states.set(file, this.makeState(text));
+    this.states.set(file, this.makeState(file, text));
     this.saved.set(file, text);
     this.dirty.delete(file);
   }
@@ -266,14 +302,9 @@ export class Editor {
   }
 
   /** Shows compile problems for the current file in the gutter. */
-  setProblems(problems: { line: number; severity: "error" | "warning" | "info"; message: string }[]) {
-    const doc = this.view.state.doc;
-    const diagnostics: Diagnostic[] = problems
-      .filter((p) => p.line >= 1 && p.line <= doc.lines)
-      .map((p) => {
-        const line = doc.line(p.line);
-        return { from: line.from, to: line.to, severity: p.severity, message: p.message };
-      });
-    this.view.dispatch(setDiagnostics(this.view.state, diagnostics));
+  setProblems(problems: Problem[]) {
+    if (!this.file) return;
+    this.problems.set(this.file, problems);
+    forceLinting(this.view);
   }
 }

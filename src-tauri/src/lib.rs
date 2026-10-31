@@ -5,6 +5,7 @@ mod letter;
 mod project;
 mod review;
 mod synctex;
+mod ruru;
 mod taura;
 mod tools;
 
@@ -208,6 +209,27 @@ async fn taura_trace(root: String, target: String) -> Result<serde_json::Value, 
         .map_err(|e| e.to_string())?
 }
 
+/// The paper's bib entries and the ruru library, for citation completion and checks.
+#[tauri::command]
+async fn citation_library(root: String, files: Vec<String>) -> Result<ruru::Library, String> {
+    tauri::async_runtime::spawn_blocking(move || ruru::library(Path::new(&root), &files))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ruru_show(key: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || ruru::show(&key)).await.map_err(|e| e.to_string())?
+}
+
+/// `ruru check` on the main file; None when ruru isn't installed.
+#[tauri::command]
+async fn ruru_check(root: String, main: String) -> Result<Option<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || ruru::check(Path::new(&root), &main))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -233,6 +255,9 @@ pub fn run() {
             open_path,
             taura_report,
             taura_trace,
+            citation_library,
+            ruru_show,
+            ruru_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -339,5 +364,23 @@ mod tests {
         assert_eq!(issues[0].line, Some(12));
         assert_eq!(issues[1].line, Some(88));
         assert_eq!(issues[2].line, Some(40));
+    }
+
+    /// `TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn ruru_library_and_check() {
+        let root = PathBuf::from(std::env::var("TUHI_TEST_RURU_PAPER").expect("set TUHI_TEST_RURU_PAPER"));
+        let opened = project::open(&root).unwrap();
+        let library = ruru::library(&root, &opened.files);
+        println!("project {:?} · {} bib entries · {} papers", library.project, library.bib.len(), library.papers.len());
+        assert!(!library.bib.is_empty());
+        let first = &library.bib[0];
+        println!("first: {} ({}:{}) {}", first.key, first.file, first.line, first.title);
+        let report = ruru::check(&root, opened.main.as_deref().unwrap()).unwrap().unwrap();
+        println!("cited {} · issues {}", report["cited"], report["issues"]);
+        let key = &library.papers[0].key;
+        assert_eq!(ruru::show(key).unwrap()["key"], key.as_str());
+        assert!(ruru::show("--help").is_err());
     }
 }

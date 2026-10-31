@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
+import { Citations } from "./citations";
 import { Editor } from "./editor";
 import { Preview } from "./preview";
 import { ReviewPanel } from "./review";
@@ -37,17 +38,26 @@ const LAST_PROJECT = "tuhi.lastProject";
 
 let project: api.Project | null = null;
 let issues: api.Issue[] = [];
+/** From the last compile; `issues` adds ruru's citation check to these. */
+let compileIssues: api.Issue[] = [];
+let compileLog = "";
+let citeIssues: api.Issue[] = [];
 let compiling = false;
 let compileQueued = false;
 /** taura's report for the open paper; null when it isn't paired with a code repo. */
 let taura: api.TauraReport | null = null;
+
+const citations = new Citations({
+  show: (key) => api.ruruShow(key),
+  jump: (file, line) => void openFile(file, line).catch(report),
+});
 
 const editor = new Editor($("editor"), {
   onSave: () => void saveAndCompile(),
   onDirtyChange: () => (ui.dirty.hidden = editor.dirtyFiles().length === 0),
   onForwardSync: (line, column) => void forwardSync(line, column),
   onMarkerClick: (marker, x, y) => void showProvenance(marker, x, y),
-});
+}, citations);
 
 const preview = new Preview($("preview"), (page, x, y) => void inverseSync(page, x, y));
 
@@ -111,11 +121,14 @@ async function loadProject(path: string) {
   ui.empty.hidden = true;
   editor.reset();
   preview.clear();
+  citations.set(null, "");
+  citeIssues = [];
   showIssues([], "");
 
   await reviewPanel.setProject(project.root, project.main);
   taura = null;
   void refreshProvenance();
+  void refreshCitations(false);
 
   const first = project.main ?? project.files.find((f) => f.endsWith(".tex")) ?? project.files[0];
   if (first) await openFile(first);
@@ -172,6 +185,7 @@ async function runCompile() {
     if (result.pdf) await preview.load(await api.readPdf(root, main));
     showIssues(result.issues, result.log);
     void refreshProvenance();
+    void refreshCitations(true);
     const errors = result.issues.filter((i) => i.severity === "error").length;
     const seconds = (result.millis / 1000).toFixed(1);
     if (errors) setStatus(`${errors} error${errors > 1 ? "s" : ""} · ${seconds}s`, true);
@@ -266,10 +280,54 @@ async function showProvenance(marker: Marker, x: number, y: number) {
   }
 }
 
+// Citations (the .bib and ruru)
+
+let citationRun = 0;
+
+/** Reloads the .bib entries and ruru library; after a compile also runs `ruru check`. */
+async function refreshCitations(check: boolean) {
+  if (!project) return;
+  const { root, main, files } = project;
+  const run = ++citationRun;
+  const [library, report] = await Promise.all([
+    api.citationLibrary(root, files).catch(() => null),
+    check && main ? api.ruruCheck(root, main).catch(() => null) : Promise.resolve(undefined),
+  ]);
+  if (run !== citationRun || project?.root !== root) return;
+  citations.set(library, main ? `${root}/${main}` : root);
+  editor.relint();
+  if (report !== undefined) {
+    citeIssues = report && library ? checkIssues(report, library) : [];
+    showIssues(compileIssues, compileLog);
+  }
+}
+
+/**
+ * `ruru check` findings for the Problems panel. Missing keys are left to the editor, which
+ * marks them where they're cited; these are the bib-side ones.
+ */
+function checkIssues(report: api.RuruCheck, library: api.CitationLibrary): api.Issue[] {
+  const entry = (key: string) => library.bib.find((e) => e.key === key);
+  const at = (key: string, severity: api.Issue["severity"], message: string): api.Issue => {
+    const e = entry(key);
+    return { severity, file: e?.file ?? null, line: e?.line ?? null, message };
+  };
+  const fix = citations.fixCommand();
+  const { issues: found } = report;
+  return [
+    ...(found.stale ?? []).map((k) => at(k, "warning", `${k}: the .bib entry differs from your ruru library. To regenerate it: ${fix}`)),
+    ...(found.duplicates ?? []).map((keys) => at(keys[0], "warning", `${keys.join(" and ")} are the same paper under two keys`)),
+    ...(found.unused ?? []).map((k) => at(k, "info", `${k} is in ruru's part of the .bib but never cited`)),
+    ...report.warnings.map((w): api.Issue => ({ severity: "info", file: null, line: null, message: `ruru: ${w}` })),
+  ];
+}
+
 // Problems panel
 
 function showIssues(next: api.Issue[], log: string) {
-  issues = next;
+  compileIssues = next;
+  compileLog = log;
+  issues = [...next, ...citeIssues];
   ui.log.textContent = log;
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.filter((i) => i.severity === "warning").length;
