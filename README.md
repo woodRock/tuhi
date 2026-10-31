@@ -32,6 +32,15 @@ The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
   **Place at cursor** re-links a card to the editor's line. Click a card to jump to it.
 - Statuses are Open, Proposed, Accepted and Won't fix (with a reason for the response letter).
 
+- **Draft change** asks Claude (through the `claude` CLI, so your Claude login) for the
+  smallest edit that addresses the comment, plus a draft reply to the reviewer. **Draft all
+  open** does every open card, two at a time. Claude can read the project but not change it,
+  and is told not to invent results or citations; anything it needs from you appears under
+  "Needs you". Each draft costs a few cents to a few tens of cents, shown on the card.
+- Review the draft hunk by hunk: **Accept** applies it in the editor (⌘S to save), **Edit**
+  lets you change the replacement first, **Reject** drops it, **Undo** reverses an accepted
+  hunk. A card becomes Accepted once every hunk is decided and at least one was accepted.
+
 Reviews are saved in the paper's repo under `.tuhi/reviews/`, alongside a copy of each
 annotated PDF.
 

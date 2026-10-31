@@ -152,6 +152,35 @@ export class Editor {
     return { file: this.file, line: state.doc.lineAt(state.selection.main.head).number };
   }
 
+  /**
+   * Replaces `before` with `after` in a loaded file (shown or not), choosing the occurrence
+   * nearest `nearLine`. Returns the line of the change, or null if `before` isn't there.
+   */
+  replace(file: string, before: string, after: string, nearLine: number): number | null {
+    const state = file === this.file ? this.view.state : this.states.get(file);
+    if (!state || !before) return null;
+    const text = state.doc.toString();
+    let best = -1;
+    let bestDistance = Infinity;
+    for (let i = text.indexOf(before); i !== -1; i = text.indexOf(before, i + 1)) {
+      const distance = Math.abs(state.doc.lineAt(i).number - nearLine);
+      if (distance < bestDistance) [best, bestDistance] = [i, distance];
+    }
+    if (best < 0) return null;
+    const changes = { from: best, to: best + before.length, insert: after };
+    if (file === this.file) {
+      this.view.dispatch({ changes });
+    } else {
+      const next = state.update({ changes }).state;
+      this.states.set(file, next);
+      const wasDirty = this.dirty.has(file);
+      if (next.doc.toString() !== this.saved.get(file)) this.dirty.add(file);
+      else this.dirty.delete(file);
+      if (wasDirty !== this.dirty.has(file)) this.hooks.onDirtyChange();
+    }
+    return state.doc.lineAt(best).number;
+  }
+
   dirtyFiles(): string[] {
     return [...this.dirty];
   }

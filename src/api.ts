@@ -92,3 +92,26 @@ export const splitComments = (letter: string) => invoke<PastedComment[]>("split_
 
 export const locateComments = (root: string, main: string, queries: LocateQuery[]) =>
   invoke<(Located | null)[]>("locate_comments", { root, main, queries });
+
+export interface Hunk {
+  file: string;
+  /** 1-based line where `before` started when drafted. */
+  line: number;
+  before: string;
+  after: string;
+  why: string;
+  state: "pending" | "accepted" | "rejected" | "stale";
+}
+
+export interface Proposal {
+  summary: string;
+  hunks: Hunk[];
+  /** Edits Claude suggested whose text wasn't found in the source. */
+  unmatched: string[];
+  response: string;
+  author_input: string;
+  cost_usd: number;
+}
+
+/** Runs one Claude session for the card; takes tens of seconds. */
+export const draftChange = (root: string, card: unknown) => invoke<Proposal>("draft_change", { root, card });

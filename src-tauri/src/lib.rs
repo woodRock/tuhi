@@ -1,4 +1,5 @@
 mod compile;
+mod draft;
 mod project;
 mod review;
 mod synctex;
@@ -143,6 +144,14 @@ async fn locate_comments(
     .map_err(|e| e.to_string())?
 }
 
+/// Asks Claude to draft a change for one review card. Slow: one Claude session per call.
+#[tauri::command]
+async fn draft_change(root: String, card: serde_json::Value) -> Result<draft::Proposal, String> {
+    tauri::async_runtime::spawn_blocking(move || draft::draft(Path::new(&root), &card))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -161,6 +170,7 @@ pub fn run() {
             read_bytes,
             split_comments,
             locate_comments,
+            draft_change,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

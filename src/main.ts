@@ -48,6 +48,13 @@ const reviewPanel = new ReviewPanel(ui.review, {
   jump: (file, line) => void openFile(file, line).catch(report),
   cursor: () => editor.cursor(),
   status: (text, error) => setStatus(text, error),
+  applyEdit: async (file, before, after, line) => {
+    if (!project) return null;
+    if (!editor.has(file)) editor.load(file, await api.readText(project.root, file));
+    const changed = editor.replace(file, before, after, line);
+    if (changed !== null) await openFile(file, changed);
+    return changed;
+  },
 });
 
 function setStatus(text: string, error = false) {
