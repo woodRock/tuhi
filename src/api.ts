@@ -226,3 +226,64 @@ export const ruruShow = (key: string) => invoke<Record<string, any>>("ruru_show"
 
 /** null when ruru isn't installed. */
 export const ruruCheck = (root: string, main: string) => invoke<RuruCheck | null>("ruru_check", { root, main });
+
+export type ClaimState = "supported" | "partial" | "unsupported" | "not-found" | "background" | "unchecked" | "outdated";
+
+/** One cited key in a claim, from `ruru claims --json`. */
+export interface ClaimCheck {
+  key: string;
+  title: string | null;
+  in_library: boolean;
+  has_pdf: boolean;
+  own: boolean;
+  /** paper | draft | software, or null when ruru knows nothing about the key. */
+  kind: "paper" | "draft" | "software" | null;
+  state: ClaimState;
+  verdict: { verdict: string; source: string; page: string | null; quote: string | null; note: string | null; by: string | null; date: string } | null;
+}
+
+export interface Claim {
+  id: string;
+  /** Relative to the main .tex file's folder. */
+  file: string;
+  line: number;
+  keys: string[];
+  /** The sentence, with cites written [@key]. */
+  text: string;
+  checks: ClaimCheck[];
+}
+
+export interface ClaimsDocument {
+  project: string;
+  claims: Claim[];
+  /** Verdicts on sentences that have since been reworded. */
+  stale: unknown[];
+}
+
+export interface ProposedVerdict {
+  claim: string;
+  verdict: string;
+  page: string;
+  quote: string;
+  note: string;
+  /** The quote is in the text Claude read; ruru refuses quotes it can't find in the PDF. */
+  quote_found: boolean;
+}
+
+export interface Judgement {
+  key: string;
+  /** pdf | abstract | draft | software: what the verdicts rest on. */
+  from: string;
+  verdicts: ProposedVerdict[];
+  cost_usd: number;
+}
+
+/** null when the folder isn't a ruru project. */
+export const claimsList = (root: string) => invoke<ClaimsDocument | null>("claims_list", { root });
+
+/** Claude's verdicts on the claims citing `key` (all of them when `claims` is empty). */
+export const claimsJudge = (root: string, key: string, claims: string[]) => invoke<Judgement>("claims_judge", { root, key, claims });
+
+/** `ruru verdict … --by claude`: one commit in the library. */
+export const claimsRecord = (root: string, key: string, from: string, verdict: ProposedVerdict) =>
+  invoke<string>("claims_record", { root, key, from, verdict });

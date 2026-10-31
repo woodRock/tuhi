@@ -43,8 +43,18 @@ pub struct Library {
     pub papers: Vec<Paper>,
 }
 
-fn run(args: &[&str]) -> Result<Value, String> {
-    let output = tools::command("ruru")?.args(args).arg("--json").output().map_err(|e| e.to_string())?;
+/// `ruru ARGS…` with `TUHI_RURU_LIBRARY` as the library when set (tests use a copy).
+pub(crate) fn command(args: &[&str]) -> Result<std::process::Command, String> {
+    let mut command = tools::command("ruru")?;
+    command.args(args);
+    if let Ok(library) = std::env::var("TUHI_RURU_LIBRARY") {
+        command.arg("-L").arg(library);
+    }
+    Ok(command)
+}
+
+pub(crate) fn run(args: &[&str]) -> Result<Value, String> {
+    let output = command(args)?.arg("--json").output().map_err(|e| e.to_string())?;
     serde_json::from_slice(&output.stdout)
         .map_err(|_| format!("ruru {}: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim()))
 }
@@ -81,7 +91,7 @@ pub fn library(root: &Path, files: &[String]) -> Library {
 }
 
 /// The ruru project with a .tex or .bib file inside `root`.
-fn project_for(root: &Path) -> Option<String> {
+pub(crate) fn project_for(root: &Path) -> Option<String> {
     let root = root.canonicalize().ok()?;
     let inside = |path: Option<&str>| {
         path.map(PathBuf::from).and_then(|p| p.canonicalize().ok()).is_some_and(|p| p.starts_with(&root))

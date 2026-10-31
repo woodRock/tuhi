@@ -87,6 +87,24 @@ findings and what `taura publish` would change. tuhi only reads: it runs taura's
 tuhi only reads the library. Commands that change it or the `.bib` are shown for you to run.
 Without ruru, completion, hover and the missing-key check still work from the `.bib` files.
 
+### Claim check
+
+The **Claims** tab lists every sentence that cites something (`ruru claims`), with ruru's
+verdict on each cited paper: supported, partial, unsupported, not found, background, or
+unchecked. **Needs attention** shows the unchecked, outdated and weak ones; weak ones also
+appear under Problems at their line.
+
+- **Check unchecked** asks Claude about every citation without a verdict, one call per cited
+  paper (two at a time) covering every sentence citing it. Claude reads the paper's full text
+  (from its PDF in the library, page by page), a cited draft's `.tex`, or software's README;
+  without a PDF it judges from the abstract and says so. **Check again** re-judges one.
+- Each verdict comes back as a proposal: the verdict, the paper's own words and page, and a
+  note. A warning shows when the quote isn't word for word in the text Claude read.
+- **Record** saves it with `ruru verdict … --by claude` (one commit in your library; ruru checks
+  the quote against the PDF and refuses it if it isn't there). **Discard** drops it.
+- Claims come from the saved files and reload after each compile. A check costs about
+  $0.05–0.10 per cited paper, shown in the counts.
+
 Build output goes to the app's cache folder, never into the paper's repo. Uses `latexmk` when
 installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelatex` picks the engine.
 
@@ -103,4 +121,6 @@ installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelate
 cd src-tauri && cargo test
 TUHI_TEST_PROJECT=~/overleaf/trust-align cargo test -- --ignored --nocapture
 TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored --nocapture
+# judges one claim with Claude and records it in a copy of the library
+TUHI_TEST_CLAIMS_PAPER=~/overleaf/trust-align TUHI_RURU_LIBRARY=/tmp/papers-copy cargo test claims_judge -- --ignored --nocapture
 ```

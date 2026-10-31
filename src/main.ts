@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import { Citations } from "./citations";
+import { ClaimsPanel } from "./claims-panel";
 import { Editor } from "./editor";
 import { Preview } from "./preview";
 import { ReviewPanel } from "./review";
@@ -32,6 +33,8 @@ const ui = {
   review: $("review"),
   tabProvenance: $("tab-provenance"),
   provenance: $("provenance"),
+  tabClaims: $("tab-claims"),
+  claims: $("claims"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -42,6 +45,8 @@ let issues: api.Issue[] = [];
 let compileIssues: api.Issue[] = [];
 let compileLog = "";
 let citeIssues: api.Issue[] = [];
+/** Citations whose verdict says the cited paper doesn't (fully) back the sentence. */
+let claimIssues: api.Issue[] = [];
 let compiling = false;
 let compileQueued = false;
 /** taura's report for the open paper; null when it isn't paired with a code repo. */
@@ -85,6 +90,15 @@ const reviewPanel = new ReviewPanel(ui.review, {
   },
 });
 
+const claimsPanel = new ClaimsPanel(ui.claims, {
+  jump: (file, line) => void openFile(fromMainDir(file), line).catch(report),
+  status: (text, error) => setStatus(text, error),
+  changed: (doc) => {
+    claimIssues = doc ? weakClaims(doc) : [];
+    showIssues(compileIssues, compileLog);
+  },
+});
+
 const provenancePanel = new ProvenancePanel(ui.provenance, {
   jump: (file, line) => void openFile(file, line).catch(report),
   refresh: () => refreshProvenance(),
@@ -123,12 +137,14 @@ async function loadProject(path: string) {
   preview.clear();
   citations.set(null, "");
   citeIssues = [];
+  claimIssues = [];
   showIssues([], "");
 
   await reviewPanel.setProject(project.root, project.main);
   taura = null;
   void refreshProvenance();
   void refreshCitations(false);
+  void claimsPanel.setProject(project.root);
 
   const first = project.main ?? project.files.find((f) => f.endsWith(".tex")) ?? project.files[0];
   if (first) await openFile(first);
@@ -186,6 +202,7 @@ async function runCompile() {
     showIssues(result.issues, result.log);
     void refreshProvenance();
     void refreshCitations(true);
+    void claimsPanel.reload();
     const errors = result.issues.filter((i) => i.severity === "error").length;
     const seconds = (result.millis / 1000).toFixed(1);
     if (errors) setStatus(`${errors} error${errors > 1 ? "s" : ""} · ${seconds}s`, true);
@@ -322,12 +339,37 @@ function checkIssues(report: api.RuruCheck, library: api.CitationLibrary): api.I
   ];
 }
 
+// Claims (ruru verdicts)
+
+/** ruru gives claim files relative to the main file's folder. */
+function fromMainDir(file: string) {
+  const dir = project?.main?.includes("/") ? project.main.slice(0, project.main.lastIndexOf("/") + 1) : "";
+  return dir + file;
+}
+
+function weakClaims(doc: api.ClaimsDocument): api.Issue[] {
+  const out: api.Issue[] = [];
+  for (const claim of doc.claims) {
+    for (const check of claim.checks) {
+      if (!["partial", "unsupported", "not-found"].includes(check.state)) continue;
+      const note = check.verdict?.note ? `: ${check.verdict.note}` : "";
+      out.push({
+        severity: "warning",
+        file: fromMainDir(claim.file),
+        line: claim.line,
+        message: `Claim check: ${check.key} is ${check.state.replace("-", " ")}${note}`,
+      });
+    }
+  }
+  return out;
+}
+
 // Problems panel
 
 function showIssues(next: api.Issue[], log: string) {
   compileIssues = next;
   compileLog = log;
-  issues = [...next, ...citeIssues];
+  issues = [...next, ...citeIssues, ...claimIssues];
   ui.log.textContent = log;
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.filter((i) => i.severity === "warning").length;
@@ -385,7 +427,7 @@ function selectTab(log: boolean) {
   ui.problems.classList.remove("collapsed");
 }
 
-type Side = "pdf" | "review" | "provenance";
+type Side = "pdf" | "review" | "provenance" | "claims";
 
 function showSide(side: Side) {
   ui.tabPdf.classList.toggle("active", side === "pdf");
@@ -394,6 +436,8 @@ function showSide(side: Side) {
   ui.preview.hidden = side !== "pdf";
   ui.review.hidden = side !== "review";
   ui.provenance.hidden = side !== "provenance";
+  ui.tabClaims.classList.toggle("active", side === "claims");
+  ui.claims.hidden = side !== "claims";
 }
 
 // Wiring
@@ -401,6 +445,7 @@ function showSide(side: Side) {
 ui.tabPdf.addEventListener("click", () => showSide("pdf"));
 ui.tabReview.addEventListener("click", () => showSide("review"));
 ui.tabProvenance.addEventListener("click", () => showSide("provenance"));
+ui.tabClaims.addEventListener("click", () => showSide("claims"));
 ui.open.addEventListener("click", () => void chooseProject().catch(report));
 ui.compile.addEventListener("click", () => void saveAndCompile());
 ui.file.addEventListener("change", () => void openFile(ui.file.value).catch(report));

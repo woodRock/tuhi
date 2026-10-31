@@ -1,7 +1,7 @@
 //! Asks Claude (via the `claude` CLI) to draft a change for one reviewer comment, then checks
 //! each proposed edit still matches the source before the author sees it.
 
-use crate::{project, tools};
+use crate::{claude, project};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
@@ -109,31 +109,8 @@ fn prompt(root: &Path, files: &[String], card: &Value) -> String {
 
 pub fn draft(root: &Path, card: &Value) -> Result<Proposal, String> {
     let files = project::open(root)?.files;
-    let output = tools::command("claude")?
-        .current_dir(root)
-        .arg("-p")
-        .arg(prompt(root, &files, card))
-        .args(["--system-prompt", SYSTEM_PROMPT])
-        // A lean session: no user plugins, hooks or MCP servers, read-only tools.
-        .args(["--setting-sources", "project", "--strict-mcp-config", "--tools", "Read,Grep,Glob"])
-        .args(["--output-format", "json", "--no-session-persistence"])
-        .arg("--json-schema")
-        .arg(schema().to_string())
-        .output()
-        .map_err(|e| format!("couldn't run claude: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let reply: Value = serde_json::from_str(&stdout).map_err(|_| {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        format!("claude failed: {}", if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() })
-    })?;
-    if reply["is_error"].as_bool().unwrap_or(false) {
-        return Err(format!("claude: {}", reply["result"].as_str().unwrap_or("unknown error")));
-    }
-    let answer = &reply["structured_output"];
-    if !answer.is_object() {
-        return Err("claude returned no proposal".into());
-    }
+    let reply = claude::ask(root, &[], SYSTEM_PROMPT, &prompt(root, &files, card), &schema())?;
+    let answer = &reply.output;
 
     let near = card["location"]["line"].as_u64().map(|l| l as u32);
     let mut hunks = Vec::new();
@@ -166,7 +143,7 @@ pub fn draft(root: &Path, card: &Value) -> Result<Proposal, String> {
         unmatched,
         response: answer["response"].as_str().unwrap_or_default().to_string(),
         author_input: answer["author_input"].as_str().unwrap_or_default().to_string(),
-        cost_usd: reply["total_cost_usd"].as_f64().unwrap_or(0.0),
+        cost_usd: reply.cost_usd,
     })
 }
 

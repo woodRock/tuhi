@@ -939,3 +939,88 @@ button.primary {
   max-height: 50vh;
   overflow: auto;
 }
+
+/* Claims tab */
+.card.claim-weak {
+  border-left-color: var(--error);
+}
+
+.card.claim-open {
+  border-left-color: var(--warning);
+}
+
+.card.claim-ok {
+  border-left-color: var(--accent);
+}
+
+.claim-text {
+  margin-top: 4px;
+}
+
+.claim-cite {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.claim-check {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.claim-check-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.claim-key {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.claim-state {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.claim-state.state-supported {
+  color: var(--accent);
+}
+
+.claim-state.state-partial,
+.claim-state.state-unchecked,
+.claim-state.state-outdated {
+  color: var(--warning);
+}
+
+.claim-state.state-unsupported,
+.claim-state.state-not-found {
+  color: var(--error);
+}
+
+.claim-ask {
+  font-size: 12px;
+}
+
+.claim-note {
+  margin: 4px 0 0;
+}
+
+.claim-warning {
+  margin: 4px 0 0;
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.claim-proposal {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px dashed #5b8def;
+  border-radius: 6px;
+}

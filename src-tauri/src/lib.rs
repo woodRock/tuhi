@@ -1,3 +1,5 @@
+mod claims;
+mod claude;
 mod compile;
 mod draft;
 mod latexdiff;
@@ -230,6 +232,29 @@ async fn ruru_check(root: String, main: String) -> Result<Option<serde_json::Val
         .map_err(|e| e.to_string())?
 }
 
+/// `ruru claims` for this folder's ruru project; None when it isn't one.
+#[tauri::command]
+async fn claims_list(root: String) -> Result<Option<serde_json::Value>, String> {
+    tauri::async_runtime::spawn_blocking(move || claims::list(Path::new(&root)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Claude's proposed verdicts on the claims citing one key.
+#[tauri::command]
+async fn claims_judge(root: String, key: String, claims: Vec<String>) -> Result<claims::Judgement, String> {
+    tauri::async_runtime::spawn_blocking(move || claims::judge(Path::new(&root), &key, &claims))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn claims_record(root: String, key: String, from: String, verdict: claims::Verdict) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || claims::record(Path::new(&root), &key, &from, &verdict))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -258,6 +283,9 @@ pub fn run() {
             citation_library,
             ruru_show,
             ruru_check,
+            claims_list,
+            claims_judge,
+            claims_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -382,5 +410,34 @@ mod tests {
         let key = &library.papers[0].key;
         assert_eq!(ruru::show(key).unwrap()["key"], key.as_str());
         assert!(ruru::show("--help").is_err());
+    }
+
+    /// Judges one real claim with Claude (a few cents) and records it in a copy of the library:
+    /// `TUHI_TEST_CLAIMS_PAPER=~/overleaf/trust-align TUHI_RURU_LIBRARY=/tmp/papers-copy \
+    ///  cargo test claims_judge -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn claims_judge_and_record() {
+        let root = PathBuf::from(std::env::var("TUHI_TEST_CLAIMS_PAPER").expect("set TUHI_TEST_CLAIMS_PAPER"));
+        assert!(std::env::var("TUHI_RURU_LIBRARY").is_ok(), "set TUHI_RURU_LIBRARY to a copy of the library");
+        let listed = claims::list(&root).unwrap().expect("a ruru project");
+        // The first library paper with a PDF, and the claims citing it.
+        let (key, recorded) = listed["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|c| c["checks"].as_array().unwrap().iter().map(move |k| (c, k)))
+            .find(|(_, k)| k["kind"] == "paper" && k["has_pdf"] == true && k["own"] == false)
+            .map(|(c, k)| (k["key"].as_str().unwrap().to_string(), (c["id"].clone(), k["state"].clone())))
+            .unwrap();
+        println!("judging {key}; recorded so far: {recorded:?}");
+        let judgement = claims::judge(&root, &key, &[]).unwrap();
+        println!("from {} · ${:.3}", judgement.from, judgement.cost_usd);
+        for v in &judgement.verdicts {
+            println!("{} {} p.{} found={} quote={:?} note={:?}", v.claim, v.verdict, v.page, v.quote_found, v.quote, v.note);
+        }
+        assert!(!judgement.verdicts.is_empty());
+        let first = &judgement.verdicts[0];
+        println!("record: {:?}", claims::record(&root, &key, &judgement.from, first));
     }
 }
