@@ -683,10 +683,14 @@ async function refreshProvenance() {
   const root = project.root;
   const run = ++provenanceRun;
   if (!taura) provenancePanel.set(null, true);
-  const next = await api.tauraReport(root).catch(() => null);
+  let error: string | undefined;
+  const next = await api.tauraReport(root).catch((e) => {
+    error = String(e);
+    return null;
+  });
   if (run !== provenanceRun || project?.root !== root) return;
   taura = next;
-  provenancePanel.set(taura, false);
+  provenancePanel.set(taura, false, error);
   updateMarkers();
 }
 

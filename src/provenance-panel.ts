@@ -37,9 +37,13 @@ export class ProvenancePanel {
   }
 
   /** `linked` false means taura has no code repo paired with this paper. */
-  set(report: TauraReport | null, loading: boolean) {
+  set(report: TauraReport | null, loading: boolean, error?: string) {
     if (loading) {
       this.body.replaceChildren(el("p", "review-empty", "Asking taura…"));
+      return;
+    }
+    if (error) {
+      this.body.replaceChildren(el("p", "review-empty", "taura didn't answer:"), el("pre", "prov-error", error));
       return;
     }
     if (!report) {

@@ -50,7 +50,9 @@ pub fn report(root: &Path) -> Result<Option<Report>, String> {
     }
     let status = match run(root, &["status"]) {
         Ok(status) => status,
-        Err(_) => return Ok(None),
+        // Not set up with taura at all; anything else is a real failure worth showing.
+        Err(e) if ["taura init", "not paired", "taura.lock", "is not inside"].iter().any(|m| e.contains(m)) => return Ok(None),
+        Err(e) => return Err(e),
     };
     // check is the slow one (about a second); run it and diff side by side.
     let (check, diff) = thread::scope(|s| {
