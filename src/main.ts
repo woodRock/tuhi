@@ -3,6 +3,8 @@ import * as api from "./api";
 import { Citations } from "./citations";
 import { ClaimsPanel } from "./claims-panel";
 import { Editor } from "./editor";
+import { newId, reanchor, withContext, type Mark } from "./marks";
+import { SuggestionsPanel, type Entry } from "./suggestions-panel";
 import { Preview } from "./preview";
 import { ReviewPanel } from "./review";
 import { markersFor, renderTrace, type Marker } from "./provenance";
@@ -35,6 +37,10 @@ const ui = {
   provenance: $("provenance"),
   tabClaims: $("tab-claims"),
   claims: $("claims"),
+  tabSuggestions: $("tab-suggestions"),
+  suggestions: $("suggestions"),
+  suggestionCount: $("suggestion-count"),
+  suggesting: $<HTMLButtonElement>("suggesting"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -62,6 +68,8 @@ const editor = new Editor($("editor"), {
   onDirtyChange: () => (ui.dirty.hidden = editor.dirtyFiles().length === 0),
   onForwardSync: (line, column) => void forwardSync(line, column),
   onMarkerClick: (marker, x, y) => void showProvenance(marker, x, y),
+  onMarksChange: () => marksChanged(),
+  onMarkFocus: (_file, id) => suggestionsPanel.focus(id),
 }, citations);
 
 const preview = new Preview($("preview"), (page, x, y) => void inverseSync(page, x, y));
@@ -72,7 +80,7 @@ const reviewPanel = new ReviewPanel(ui.review, {
   status: (text, error) => setStatus(text, error),
   applyEdit: async (file, before, after, line) => {
     if (!project) return null;
-    if (!editor.has(file)) editor.load(file, await api.readText(project.root, file));
+    await ensureLoaded(file);
     const changed = editor.replace(file, before, after, line);
     if (changed !== null) await openFile(file, changed);
     return changed;
@@ -123,6 +131,11 @@ async function chooseProject() {
 
 async function loadProject(path: string) {
   if (editor.dirtyFiles().length && !confirm("Discard unsaved changes?")) return;
+  if (sidecarTimer) {
+    clearTimeout(sidecarTimer);
+    sidecarTimer = 0;
+    await saveSidecar();
+  }
   project = await api.openProject(path);
   try {
     localStorage.setItem(LAST_PROJECT, project.root);
@@ -140,11 +153,13 @@ async function loadProject(path: string) {
   claimIssues = [];
   showIssues([], "");
 
+  await loadSidecar(project.root);
   await reviewPanel.setProject(project.root, project.main);
   taura = null;
   void refreshProvenance();
   void refreshCitations(false);
   void claimsPanel.setProject(project.root);
+  renderSuggestions();
 
   const first = project.main ?? project.files.find((f) => f.endsWith(".tex")) ?? project.files[0];
   if (first) await openFile(first);
@@ -154,12 +169,197 @@ async function loadProject(path: string) {
 
 async function openFile(file: string, line?: number, column?: number) {
   if (!project) return;
-  if (!editor.has(file)) editor.load(file, await api.readText(project.root, file));
+  await ensureLoaded(file);
   if (editor.file !== file) editor.show(file);
   ui.file.value = file;
   showProblemsInEditor();
   updateMarkers();
   if (line) editor.goTo(line, column);
+}
+
+/** Loads a file into the editor with its suggestions and comments. */
+async function ensureLoaded(file: string) {
+  if (!project || editor.has(file)) return;
+  const text = await api.readText(project.root, file);
+  if (editor.has(file)) return;
+  editor.load(file, text);
+  const stored = sidecar.files[file] ?? [];
+  if (stored.length) {
+    const { placed, lost } = reanchor(text, stored);
+    editor.setMarks(file, placed);
+    lostMarks.set(file, stored.filter((s) => lost.some((m) => m.id === s.id)));
+    renderSuggestions();
+  }
+}
+
+// Suggestions and comments (.tuhi/suggestions.json)
+
+const SIDECAR = ".tuhi/suggestions.json";
+type Stored = Mark & { quote: string; before: string };
+let sidecar: { version: 1; files: Record<string, Stored[]> } = { version: 1, files: {} };
+/** Marks whose text vanished from a loaded file; kept so nothing is silently dropped. */
+const lostMarks = new Map<string, Stored[]>();
+let sidecarTimer = 0;
+
+async function loadSidecar(root: string) {
+  sidecar = { version: 1, files: {} };
+  lostMarks.clear();
+  try {
+    const parsed = JSON.parse(await api.readText(root, SIDECAR));
+    if (parsed && typeof parsed.files === "object") sidecar = { version: 1, files: parsed.files };
+  } catch {}
+}
+
+function marksChanged() {
+  renderSuggestions();
+  clearTimeout(sidecarTimer);
+  sidecarTimer = window.setTimeout(() => {
+    sidecarTimer = 0;
+    void saveSidecar();
+  }, 800);
+}
+
+async function saveSidecar() {
+  if (!project) return;
+  const files: Record<string, Stored[]> = {};
+  const names = new Set([...Object.keys(sidecar.files), ...project.files.filter((f) => editor.has(f))]);
+  for (const file of names) {
+    const entries = editor.has(file)
+      ? [...editor.marks(file).map((m) => withContext(editor.text(file), m)), ...(lostMarks.get(file) ?? [])]
+      : (sidecar.files[file] ?? []);
+    if (entries.length) files[file] = entries;
+  }
+  const had = Object.keys(sidecar.files).length > 0;
+  sidecar = { version: 1, files };
+  if (!had && !Object.keys(files).length) return;
+  await api.writeText(project.root, SIDECAR, JSON.stringify(sidecar, null, 2) + "\n").catch(report);
+}
+
+function suggestionEntries(): Entry[] {
+  if (!project) return [];
+  const out: Entry[] = [];
+  const names = new Set([...Object.keys(sidecar.files), ...project.files.filter((f) => editor.has(f))]);
+  for (const file of names) {
+    if (editor.has(file)) {
+      const text = editor.text(file);
+      for (const mark of editor.marks(file)) {
+        out.push({ file, mark, text: text.slice(mark.from, mark.to), line: text.slice(0, mark.from).split("\n").length, lost: false });
+      }
+      for (const { quote, before: _before, ...mark } of lostMarks.get(file) ?? []) out.push({ file, mark, text: quote, line: 0, lost: true });
+    } else {
+      // Not opened yet: show what was stored; opening the file places them.
+      for (const { quote, before: _before, ...mark } of sidecar.files[file] ?? []) {
+        out.push({ file, mark, text: quote, line: 0, lost: false });
+      }
+    }
+  }
+  return out;
+}
+
+function renderSuggestions() {
+  suggestionsPanel.render();
+  const entries = suggestionEntries();
+  const open = entries.filter((e) => e.mark.kind === "suggestion" || !e.mark.resolved).length;
+  ui.suggestionCount.textContent = open ? String(open) : "";
+}
+
+function setSuggesting(on: boolean) {
+  editor.setSuggestingMode(on);
+  ui.suggesting.textContent = on ? "✎ Suggesting" : "Editing";
+  ui.suggesting.classList.toggle("on", on);
+  suggestionsPanel.render();
+  setStatus(on ? "Suggesting: your edits become suggestions" : "Editing: your edits change the text");
+}
+
+/** Makes sure a file is open in the editor (so its marks are live) before acting on them. */
+async function withFile(entry: Entry, act: () => void) {
+  await ensureLoaded(entry.file);
+  act();
+}
+
+const suggestionsPanel = new SuggestionsPanel(ui.suggestions, {
+  entries: () => suggestionEntries(),
+  selection: () => editor.selection(),
+  jump: (entry) =>
+    void withFile(entry, async () => {
+      await openFile(entry.file);
+      const mark = editor.marks(entry.file).find((m) => m.id === entry.mark.id);
+      if (mark) editor.select(mark.from, mark.to);
+    }).catch(report),
+  accept: (entries) => {
+    for (const entry of entries) void withFile(entry, () => editor.accept(entry.file, entry.mark.id));
+    if (entries.length > 1) setStatus(`Accepted ${entries.length} suggestions · ⌘S to save`);
+  },
+  reject: (entries) => {
+    for (const entry of entries) {
+      if (entry.lost) {
+        lostMarks.set(entry.file, (lostMarks.get(entry.file) ?? []).filter((m) => m.id !== entry.mark.id));
+        marksChanged();
+      } else void withFile(entry, () => editor.removeMark(entry.file, entry.mark.id));
+    }
+  },
+  reply: (entry, text) =>
+    void withFile(entry, () =>
+      editor.updateMark(entry.file, entry.mark.id, { thread: [...(entry.mark.thread ?? []), { author: "you", text, date: stamp() }] }),
+    ),
+  resolve: (entry, resolved) => void withFile(entry, () => editor.updateMark(entry.file, entry.mark.id, { resolved })),
+  comment: (text) => {
+    const sel = editor.selection();
+    if (!sel || sel.from === sel.to) return;
+    const created = stamp();
+    editor.addMarks(sel.file, [
+      { id: newId(), kind: "comment", from: sel.from, to: sel.to, insert: "", author: "you", created, thread: [{ author: "you", text, date: created }] },
+    ]);
+  },
+  askClaude: (instruction) => askClaude(instruction),
+  setSuggesting: (on) => setSuggesting(on),
+  suggesting: () => editor.isSuggesting(),
+});
+
+const stamp = () => new Date().toISOString().slice(0, 16).replace("T", " ");
+
+/** Claude suggests edits to the selection; each becomes a suggestion to accept or reject. */
+async function askClaude(instruction: string) {
+  const sel = editor.selection();
+  if (!project || !sel || !sel.text.trim()) return;
+  const root = project.root;
+  setStatus("Claude is reading the selection…");
+  try {
+    const text = editor.text(sel.file);
+    const result = await api.suggestEdits(root, sel.file, sel.text, text.slice(Math.max(0, sel.from - 1500), sel.from), text.slice(sel.to, sel.to + 800), instruction);
+    if (project?.root !== root) return;
+    // The text may have moved while Claude worked: find the passage again, nearest first.
+    const now = editor.text(sel.file);
+    let start = -1;
+    for (let i = now.indexOf(sel.text); i !== -1; i = now.indexOf(sel.text, i + 1)) {
+      if (start === -1 || Math.abs(i - sel.from) < Math.abs(start - sel.from)) start = i;
+    }
+    if (start === -1) throw new Error("The selected text changed while Claude was reading it");
+    const taken = editor.marks(sel.file).filter((m) => m.kind === "suggestion");
+    const marks: Mark[] = [];
+    let missed = 0;
+    for (const edit of result.edits) {
+      const at = sel.text.indexOf(edit.find);
+      const from = start + at;
+      const to = from + edit.find.length;
+      const clash = [...taken, ...marks].some((m) => m.from < to && m.to > from);
+      if (at === -1 || clash) {
+        missed++;
+        continue;
+      }
+      marks.push({ id: newId(), kind: "suggestion", from, to, insert: edit.replace, author: "claude", created: stamp(), note: edit.why });
+    }
+    if (marks.length) editor.addMarks(sel.file, marks);
+    showSide("suggestions");
+    const cost = ` · $${result.cost_usd.toFixed(2)}`;
+    setStatus(
+      marks.length
+        ? `Claude suggested ${marks.length} edit(s)${missed ? ` (${missed} didn't match the text)` : ""}${cost}`
+        : `${result.summary || "Claude suggested no edits"}${cost}`,
+    );
+  } catch (error) {
+    report(error);
+  }
 }
 
 // Compiling
@@ -427,7 +627,7 @@ function selectTab(log: boolean) {
   ui.problems.classList.remove("collapsed");
 }
 
-type Side = "pdf" | "review" | "provenance" | "claims";
+type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions";
 
 function showSide(side: Side) {
   ui.tabPdf.classList.toggle("active", side === "pdf");
@@ -438,6 +638,8 @@ function showSide(side: Side) {
   ui.provenance.hidden = side !== "provenance";
   ui.tabClaims.classList.toggle("active", side === "claims");
   ui.claims.hidden = side !== "claims";
+  ui.tabSuggestions.classList.toggle("active", side === "suggestions");
+  ui.suggestions.hidden = side !== "suggestions";
 }
 
 // Wiring
@@ -446,6 +648,8 @@ ui.tabPdf.addEventListener("click", () => showSide("pdf"));
 ui.tabReview.addEventListener("click", () => showSide("review"));
 ui.tabProvenance.addEventListener("click", () => showSide("provenance"));
 ui.tabClaims.addEventListener("click", () => showSide("claims"));
+ui.tabSuggestions.addEventListener("click", () => showSide("suggestions"));
+ui.suggesting.addEventListener("click", () => setSuggesting(!editor.isSuggesting()));
 ui.open.addEventListener("click", () => void chooseProject().catch(report));
 ui.compile.addEventListener("click", () => void saveAndCompile());
 ui.file.addEventListener("change", () => void openFile(ui.file.value).catch(report));
@@ -458,7 +662,15 @@ ui.problemsToggle.addEventListener("click", () => {
 
 document.addEventListener("keydown", (event) => {
   const mod = event.metaKey || event.ctrlKey;
-  if (mod && event.key === "o") {
+  if (mod && event.shiftKey && event.key.toLowerCase() === "e") {
+    event.preventDefault();
+    setSuggesting(!editor.isSuggesting());
+  } else if (mod && event.altKey && (event.code === "KeyM" || event.code === "KeyK")) {
+    // ⌥ changes event.key on macOS, so match the physical key.
+    event.preventDefault();
+    showSide("suggestions");
+    suggestionsPanel.openComposer(event.code === "KeyM" ? "comment" : "claude");
+  } else if (mod && event.key === "o") {
     event.preventDefault();
     void chooseProject().catch(report);
   } else if (mod && event.key === "s") {

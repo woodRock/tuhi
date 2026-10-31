@@ -153,6 +153,10 @@ button.primary {
   z-index: 1;
 }
 
+.empty[hidden] {
+  display: none;
+}
+
 .empty .hint {
   font-size: 12px;
 }
@@ -1023,4 +1027,102 @@ button.primary {
   padding: 6px 8px;
   border: 1px dashed #5b8def;
   border-radius: 6px;
+}
+
+/* Suggesting mode and the Suggestions tab */
+.toolbar .mode.on {
+  background: #5b8def;
+  border-color: #5b8def;
+  color: #fff;
+}
+
+.chip.suggesting {
+  background: #5b8def;
+  color: #fff;
+}
+
+.sugg-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 10px 8px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.sugg-composer[hidden] {
+  display: none;
+}
+
+.sugg-composer textarea,
+.thread-reply {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.sugg-composer textarea {
+  resize: vertical;
+}
+
+.thread-reply {
+  width: 100%;
+  margin-top: 6px;
+  box-sizing: border-box;
+}
+
+.card.sugg {
+  border-left-color: #2f6f5e;
+}
+
+.card.sugg.by-claude {
+  border-left-color: #5b8def;
+}
+
+.card.comment {
+  border-left-color: rgba(255, 196, 0, 0.9);
+}
+
+.card.comment.resolved,
+.card.lost {
+  opacity: 0.65;
+}
+
+.card.focused {
+  box-shadow: 0 0 0 2px var(--sync);
+}
+
+.sugg-diff {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.sugg-diff del {
+  color: var(--error);
+}
+
+.sugg-diff ins {
+  color: var(--accent);
+  text-decoration: none;
+  background: rgba(47, 111, 94, 0.12);
+}
+
+.thread-message {
+  margin-top: 6px;
+}
+
+.thread-author {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.thread-message .card-comment {
+  margin-top: 2px;
 }

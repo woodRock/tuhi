@@ -19,6 +19,25 @@ npm run tauri dev
   **⌘J** shows the cursor's line in the PDF.
 - Problems from the TeX log and BibTeX appear under the editor and in the gutter; click one to jump.
 
+### Suggestions and comments
+
+Like suggesting mode in Google Docs: nothing reaches the `.tex` until it's accepted.
+
+- **Suggesting** (toolbar, or ⌘⇧E) turns what you type into suggestions: deleted text is
+  struck through and new text shown in green, and the file itself doesn't change. Backspace takes
+  back what you just typed; ⌘Z undoes suggestions too.
+- **⌘⌥M** comments on the selected text. Comments are highlighted in the editor and threaded
+  in the **Suggestions** tab, where you can reply and resolve them.
+- **⌘⌥K** asks Claude to suggest edits to the selection, with an optional instruction ("cut
+  to 100 words", "make the claim more cautious"). Each edit comes back as a separate suggestion
+  (dashed outline) with a short reason, and macros, citations and numbers are left alone.
+- The **Suggestions** tab lists every suggestion and comment: click one to jump to it, then
+  **Accept** (writes it into the text; ⌘S to save) or **Reject**, or **Accept all**.
+
+Suggestions and comments are stored in `.tuhi/suggestions.json` in the paper's repo, with the
+text around each one, so they find their place again after the file changes elsewhere (an
+Overleaf pull). One whose text is gone is listed but can't be accepted.
+
 ### Reviewer comments
 
 The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
@@ -121,6 +140,7 @@ installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelate
 cd src-tauri && cargo test
 TUHI_TEST_PROJECT=~/overleaf/trust-align cargo test -- --ignored --nocapture
 TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored --nocapture
+TUHI_TEST_SUGGEST_PAPER=~/overleaf/trust-align cargo test suggests_edits -- --ignored --nocapture
 # judges one claim with Claude and records it in a copy of the library
 TUHI_TEST_CLAIMS_PAPER=~/overleaf/trust-align TUHI_RURU_LIBRARY=/tmp/papers-copy cargo test claims_judge -- --ignored --nocapture
 ```

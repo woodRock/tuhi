@@ -16,6 +16,7 @@
       <span id="dirty" class="dirty" hidden title="Unsaved changes">●</span>
       <span class="spacer"></span>
       <span id="status" class="status"></span>
+      <button id="suggesting" class="mode" title="Suggesting: what you type becomes suggestions to accept later (⌘⇧E)">Editing</button>
       <button id="compile" class="primary" title="Save and compile (⌘S)" disabled>Compile</button>
     </header>
 
@@ -24,7 +25,7 @@
         <div id="editor" class="editor">
           <div class="empty" id="empty">
             <p>Open a paper folder to start.</p>
-            <p class="hint">⌘S save and compile · ⌘-click source or PDF to jump · ⌘J show cursor in PDF</p>
+            <p class="hint">⌘S save and compile · ⌘-click source or PDF to jump · ⌘J show cursor in PDF<br />⌘⇧E suggesting mode · ⌘⌥M comment · ⌘⌥K ask Claude</p>
           </div>
         </div>
         <div class="problems" id="problems">
@@ -45,11 +46,13 @@
           <button id="tab-review" class="tab">Review</button>
           <button id="tab-provenance" class="tab">Provenance</button>
           <button id="tab-claims" class="tab">Claims</button>
+          <button id="tab-suggestions" class="tab">Suggestions <span id="suggestion-count"></span></button>
         </div>
         <div class="preview" id="preview"></div>
         <div class="review" id="review" hidden></div>
         <div class="review" id="provenance" hidden></div>
         <div class="review" id="claims" hidden></div>
+        <div class="review" id="suggestions" hidden></div>
       </section>
     </main>
   </body>

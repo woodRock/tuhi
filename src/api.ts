@@ -287,3 +287,14 @@ export const claimsJudge = (root: string, key: string, claims: string[]) => invo
 /** `ruru verdict … --by claude`: one commit in the library. */
 export const claimsRecord = (root: string, key: string, from: string, verdict: ProposedVerdict) =>
   invoke<string>("claims_record", { root, key, from, verdict });
+
+export interface SuggestedEdit {
+  /** Verbatim text from the selected passage. */
+  find: string;
+  replace: string;
+  why: string;
+}
+
+/** Claude's edits to a selected passage; `before`/`after` are context it mustn't edit. */
+export const suggestEdits = (root: string, file: string, passage: string, before: string, after: string, instruction: string) =>
+  invoke<{ summary: string; edits: SuggestedEdit[]; cost_usd: number }>("suggest_edits", { root, file, passage, before, after, instruction });

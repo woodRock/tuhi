@@ -1,12 +1,13 @@
 import { basicSetup } from "codemirror";
 import { Decoration, DecorationSet, EditorView, GutterMarker, gutter, hoverTooltip, keymap } from "@codemirror/view";
-import { Compartment, EditorState, Extension, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Extension, Transaction, TransactionSpec, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { Diagnostic, forceLinting, lintGutter, linter } from "@codemirror/lint";
 import { oneDark } from "@codemirror/theme-one-dark";
 import type { Citations } from "./citations";
+import { acceptSpec, marksExtension, marksField, setMarks, setSuggesting, suggestingField, type Mark } from "./marks";
 import type { Marker } from "./provenance";
 
 export interface EditorHooks {
@@ -16,6 +17,10 @@ export interface EditorHooks {
   onForwardSync(line: number, column: number): void;
   /** A provenance dot in the gutter was clicked. */
   onMarkerClick(marker: Marker, x: number, y: number): void;
+  /** Suggestions or comments in `file` changed (added, accepted, moved by an edit). */
+  onMarksChange(file: string): void;
+  /** The cursor or selection moved into a suggestion or comment (null when it left one). */
+  onMarkFocus(file: string, id: string | null): void;
 }
 
 export interface Problem {
@@ -95,6 +100,8 @@ export class Editor {
   private flashTimer = 0;
   /** Compile problems per file, shown alongside the citation checks. */
   private problems = new Map<string, Problem[]>();
+  private suggesting = false;
+  private focused: string | null = null;
   file: string | null = null;
 
   constructor(parent: HTMLElement, private hooks: EditorHooks, private citations: Citations) {
@@ -109,6 +116,15 @@ export class Editor {
           if (isDirty) this.dirty.add(this.file);
           else this.dirty.delete(this.file);
           if (wasDirty !== isDirty) this.hooks.onDirtyChange();
+        }
+        if (this.file && tr.startState.field(marksField, false) !== tr.state.field(marksField, false)) this.hooks.onMarksChange(this.file);
+        if (this.file && (tr.selection || tr.docChanged)) {
+          const head = tr.state.selection.main.head;
+          const at = tr.state.field(marksField, false)?.find((m) => m.from <= head && head <= m.to);
+          if ((at?.id ?? null) !== this.focused) {
+            this.focused = at?.id ?? null;
+            this.hooks.onMarkFocus(this.file, this.focused);
+          }
         }
       },
     });
@@ -149,6 +165,8 @@ export class Editor {
           },
         }),
         flashField,
+        marksExtension,
+        suggestingField.init(() => this.suggesting),
         this.theme.of(themeFor(darkQuery.matches)),
         keymap.of([
           indentWithTab,
@@ -294,6 +312,97 @@ export class Editor {
     this.view.focus();
     clearTimeout(this.flashTimer);
     this.flashTimer = window.setTimeout(() => this.view.dispatch({ effects: flashLine.of(null) }), 1200);
+  }
+
+  // Suggestions and comments
+
+  private stateOf(file: string) {
+    return file === this.file ? this.view.state : this.states.get(file);
+  }
+
+  /** Applies a transaction to a file, shown or not, keeping dirty tracking right. */
+  private apply(file: string, spec: TransactionSpec) {
+    if (file === this.file) {
+      this.view.dispatch(spec);
+      return;
+    }
+    const state = this.states.get(file);
+    if (!state) return;
+    const tr = state.update(spec);
+    this.states.set(file, tr.state);
+    if (tr.docChanged) {
+      const wasDirty = this.dirty.has(file);
+      if (tr.state.doc.toString() !== this.saved.get(file)) this.dirty.add(file);
+      else this.dirty.delete(file);
+      if (wasDirty !== this.dirty.has(file)) this.hooks.onDirtyChange();
+    }
+    this.hooks.onMarksChange(file);
+  }
+
+  marks(file: string): Mark[] {
+    return this.stateOf(file)?.field(marksField, false) ?? [];
+  }
+
+  setMarks(file: string, marks: Mark[]) {
+    // Not an undoable step: these come from disk.
+    const state = this.stateOf(file);
+    if (!state) return;
+    const tr = state.update({ effects: setMarks.of(marks), annotations: Transaction.addToHistory.of(false) });
+    if (file === this.file) this.view.update([tr]);
+    else this.states.set(file, tr.state);
+  }
+
+  /** Adds marks, e.g. Claude's suggestions; undoable. */
+  addMarks(file: string, marks: Mark[]) {
+    this.apply(file, { effects: setMarks.of([...this.marks(file), ...marks]) });
+  }
+
+  /** Changes one mark (a reply, resolving a comment). */
+  updateMark(file: string, id: string, change: Partial<Mark>) {
+    this.apply(file, { effects: setMarks.of(this.marks(file).map((m) => (m.id === id ? { ...m, ...change } : m))) });
+  }
+
+  removeMark(file: string, id: string) {
+    this.apply(file, { effects: setMarks.of(this.marks(file).filter((m) => m.id !== id)) });
+  }
+
+  /** Writes a suggestion into the text. */
+  accept(file: string, id: string): boolean {
+    const state = this.stateOf(file);
+    const spec = state && acceptSpec(state, id);
+    if (!spec) return false;
+    this.apply(file, spec);
+    return true;
+  }
+
+  isSuggesting() {
+    return this.suggesting;
+  }
+
+  /** In suggesting mode typing makes suggestions instead of changing the text. */
+  setSuggestingMode(on: boolean) {
+    this.suggesting = on;
+    const effect = setSuggesting.of(on);
+    for (const [file, state] of this.states) {
+      if (file !== this.file) this.states.set(file, state.update({ effects: effect }).state);
+    }
+    if (this.file) this.view.dispatch({ effects: effect });
+  }
+
+  /** The current selection with its text. */
+  selection(): { file: string; from: number; to: number; text: string; line: number } | null {
+    if (!this.file) return null;
+    const { state } = this.view;
+    const { from, to } = state.selection.main;
+    return { file: this.file, from, to, text: state.sliceDoc(from, to), line: state.doc.lineAt(from).number };
+  }
+
+  /** Selects a range in the current file and scrolls to it. */
+  select(from: number, to: number) {
+    const max = this.view.state.doc.length;
+    const range = EditorSelection.range(Math.min(from, max), Math.min(to, max));
+    this.view.dispatch({ selection: range, effects: EditorView.scrollIntoView(range.from, { y: "center" }) });
+    this.view.focus();
   }
 
   /** Shows provenance dots for the current file. */

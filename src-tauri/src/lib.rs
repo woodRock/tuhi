@@ -6,6 +6,7 @@ mod latexdiff;
 mod letter;
 mod project;
 mod review;
+mod suggest;
 mod synctex;
 mod ruru;
 mod taura;
@@ -39,6 +40,10 @@ fn read_text(root: String, file: String) -> Result<String, String> {
 #[tauri::command]
 fn write_text(root: String, file: String, contents: String) -> Result<(), String> {
     let path = project::resolve(Path::new(&root), &file)?;
+    // For sidecar files such as .tuhi/suggestions.json.
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{file}: {e}"))?;
+    }
     fs::write(&path, contents).map_err(|e| format!("{file}: {e}"))
 }
 
@@ -255,6 +260,21 @@ async fn claims_record(root: String, key: String, from: String, verdict: claims:
         .map_err(|e| e.to_string())?
 }
 
+/// Claude's suggested edits to a selected passage.
+#[tauri::command]
+async fn suggest_edits(
+    root: String,
+    file: String,
+    passage: String,
+    before: String,
+    after: String,
+    instruction: String,
+) -> Result<suggest::Suggestions, String> {
+    tauri::async_runtime::spawn_blocking(move || suggest::suggest(Path::new(&root), &file, &passage, &before, &after, &instruction))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -286,6 +306,7 @@ pub fn run() {
             claims_list,
             claims_judge,
             claims_record,
+            suggest_edits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -439,5 +460,22 @@ mod tests {
         assert!(!judgement.verdicts.is_empty());
         let first = &judgement.verdicts[0];
         println!("record: {:?}", claims::record(&root, &key, &judgement.from, first));
+    }
+
+    /// `TUHI_TEST_SUGGEST_PAPER=~/overleaf/trust-align cargo test suggests_edits -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn suggests_edits_for_a_real_passage() {
+        let root = PathBuf::from(std::env::var("TUHI_TEST_SUGGEST_PAPER").expect("set TUHI_TEST_SUGGEST_PAPER"));
+        let main = project::open(&root).unwrap().main.unwrap();
+        let text = fs::read_to_string(root.join(&main)).unwrap();
+        // The first long prose paragraph line.
+        let passage = text.lines().find(|l| l.len() > 300 && !l.trim_start().starts_with(['%', '\\'])).unwrap();
+        let result = suggest::suggest(&root, &main, passage, "", "", "Tighten this; cut redundant words.").unwrap();
+        println!("{} · ${:.3}", result.summary, result.cost_usd);
+        for e in &result.edits {
+            println!("- {:?} -> {:?} ({}) found={}", e.find, e.replace, e.why, passage.contains(&e.find));
+        }
+        assert!(result.edits.iter().all(|e| passage.contains(&e.find)));
     }
 }
