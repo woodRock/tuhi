@@ -277,6 +277,8 @@ button.primary {
 
 .problem-list li {
   display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   gap: 8px;
   padding: 3px 10px;
   cursor: default;
@@ -1125,4 +1127,130 @@ button.primary {
 
 .thread-message .card-comment {
   margin-top: 2px;
+}
+
+/* Checks tab */
+.checks-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 0 10px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.checks-limit {
+  width: 56px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.card.check {
+  border-left-color: var(--border);
+}
+
+.card.check-ok {
+  border-left-color: var(--accent);
+}
+
+.card.check-warn {
+  border-left-color: var(--warning);
+}
+
+.card.check-fail {
+  border-left-color: var(--error);
+}
+
+.card.check-off {
+  opacity: 0.75;
+}
+
+.check-icon {
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.check-icon.check-ok {
+  color: var(--accent);
+}
+
+.check-icon.check-warn {
+  color: var(--warning);
+}
+
+.check-icon.check-fail {
+  color: var(--error);
+}
+
+.check-icon.check-info,
+.check-icon.check-off {
+  color: var(--muted);
+}
+
+.check-summary {
+  white-space: normal;
+  margin: 2px 0 0 22px;
+}
+
+.check-finding {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.check-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.check-finding.sev-warning .check-message {
+  color: var(--text);
+}
+
+.check-finding.sev-info .check-message {
+  color: var(--muted);
+}
+
+.checks-lint-head {
+  display: flex;
+  align-items: center;
+}
+
+/* Problems: explain and fix */
+.problem-action {
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 0 6px;
+}
+
+.explain {
+  flex-basis: 100%;
+  margin: 4px 0 2px 22px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: default;
+  white-space: normal;
+}
+
+.explain p {
+  margin: 0 0 6px;
+}
+
+.explain-fix {
+  margin: 0 0 6px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  font-size: 12px;
 }

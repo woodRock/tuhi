@@ -99,7 +99,7 @@ pub fn make(root: &Path, main: &str, rev: &str, work: &Path) -> Result<compile::
     compile::compile(&new, &diff_name, &work.join("out"))
 }
 
-fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
         let name = entry.file_name();

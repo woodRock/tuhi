@@ -104,6 +104,31 @@ export class Preview {
   }
 
   /** Draws the SyncTeX boxes for a source line and scrolls the first one into view. */
+  /** Pages in the loaded PDF, or null. */
+  pageCount(): number | null {
+    return this.doc?.numPages ?? null;
+  }
+
+  /** The page with the References (or Bibliography) heading, searching from the end. */
+  async referencesPage(): Promise<number | null> {
+    const doc = this.doc;
+    if (!doc) return null;
+    for (let n = doc.numPages; n >= 1; n--) {
+      const content = await (await doc.getPage(n)).getTextContent();
+      // Join items on the same baseline: IEEEtran's small caps split "R EFERENCES".
+      const lines = new Map<number, string>();
+      for (const item of content.items) {
+        if (!("str" in item)) continue;
+        const y = Math.round(item.transform[5]);
+        lines.set(y, (lines.get(y) ?? "") + item.str);
+      }
+      for (const line of lines.values()) {
+        if (/^(references|bibliography)$/i.test(line.replace(/[\s\d.]/g, ""))) return n;
+      }
+    }
+    return null;
+  }
+
   highlight(boxes: PdfBox[]) {
     this.container.querySelectorAll(".sync-mark").forEach((el) => el.remove());
     let first: HTMLElement | null = null;

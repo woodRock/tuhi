@@ -27,6 +27,8 @@ export interface Problem {
   line: number;
   severity: "error" | "warning" | "info";
   message: string;
+  /** Offered as a Fix button: replaces the first `find` on the line. */
+  fix?: { find: string; replace: string };
 }
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -194,7 +196,15 @@ export class Editor {
       .filter((p) => p.line >= 1 && p.line <= doc.lines)
       .map((p) => {
         const line = doc.line(p.line);
-        return { from: line.from, to: line.to, severity: p.severity, message: p.message };
+        const at = p.fix ? line.text.indexOf(p.fix.find) : -1;
+        const from = at >= 0 ? line.from + at : line.from;
+        const to = at >= 0 ? from + p.fix!.find.length : line.to;
+        const fix = p.fix;
+        const actions =
+          fix && at >= 0
+            ? [{ name: `Fix: ${fix.replace}`, apply: (v: EditorView, a: number, b: number) => v.dispatch({ changes: { from: a, to: b, insert: fix.replace } }) }]
+            : undefined;
+        return { from, to, severity: p.severity, message: p.message, actions };
       });
     if (file.endsWith(".tex")) out.push(...this.citations.lint(doc.toString()));
     return out;

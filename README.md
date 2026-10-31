@@ -38,6 +38,31 @@ Suggestions and comments are stored in `.tuhi/suggestions.json` in the paper's r
 text around each one, so they find their place again after the file changes elsewhere (an
 Overleaf pull). One whose text is gone is listed but can't be accepted.
 
+### Checks before you submit
+
+The **Checks** tab runs after each compile (and when opened), on the text in the editor:
+
+- **Checklist:** compiles cleanly; page count against the venue's limit (with or without the
+  references, found from the PDF's References heading); anonymity for double-blind review
+  (`\author`, `\thanks`, acknowledgements, GitHub links, `pdfauthor`, "our previous work");
+  every `\ref` and citation resolves, no duplicate labels; unused labels; figures and tables
+  with captions, labels and alt text; overfull lines; leftover TODOs, `\todo` and highlights.
+  The page limit and double-blind switch are saved per paper in `.tuhi/settings.json`.
+- **Consistency**, also shown in the editor and Problems with a Fix button where the fix is safe:
+  - acronyms used before they're spelled out, spelled out twice, or never (headings, the
+    abstract and floats don't count as first use; papers using an acronym package are skipped)
+  - British and American spellings mixed (normalise/normalize, modelling/modeling, …) and
+    compounds written both closed and open (dataset/data set)
+  - te reo Māori words missing macrons (Maori → Māori, whanau → whānau, …); `M\=aori` counts
+  - notation: a symbol bold with `\mathbf` here and `\bm` there, "Fig." and "Figure"
+    mid-sentence, "e.g.," with and without the comma
+
+Only files the main file reaches through `\input` and `\include` are checked.
+
+**Explain** on a compile error in Problems gives a plain-English explanation of common errors
+straight away. **Ask Claude** reads the log and source and proposes the fix, which **Apply fix**
+makes in the editor (⌘S to save and recompile); about $0.05.
+
 ### Reviewer comments
 
 The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
@@ -141,6 +166,7 @@ cd src-tauri && cargo test
 TUHI_TEST_PROJECT=~/overleaf/trust-align cargo test -- --ignored --nocapture
 TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored --nocapture
 TUHI_TEST_SUGGEST_PAPER=~/overleaf/trust-align cargo test suggests_edits -- --ignored --nocapture
+TUHI_TEST_EXPLAIN_PAPER=~/overleaf/trust-align cargo test explains -- --ignored --nocapture
 # judges one claim with Claude and records it in a copy of the library
 TUHI_TEST_CLAIMS_PAPER=~/overleaf/trust-align TUHI_RURU_LIBRARY=/tmp/papers-copy cargo test claims_judge -- --ignored --nocapture
 ```

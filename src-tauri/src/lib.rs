@@ -2,6 +2,7 @@ mod claims;
 mod claude;
 mod compile;
 mod draft;
+mod explain;
 mod latexdiff;
 mod letter;
 mod project;
@@ -275,6 +276,20 @@ async fn suggest_edits(
         .map_err(|e| e.to_string())?
 }
 
+/// Claude's plain-English explanation of a compile error, with a fix when it can find one.
+#[tauri::command]
+async fn explain_error(
+    root: String,
+    message: String,
+    file: Option<String>,
+    line: Option<u32>,
+    log: String,
+) -> Result<explain::Explanation, String> {
+    tauri::async_runtime::spawn_blocking(move || explain::explain(Path::new(&root), &message, file.as_deref(), line, &log))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -307,6 +322,7 @@ pub fn run() {
             claims_judge,
             claims_record,
             suggest_edits,
+            explain_error,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -477,5 +493,32 @@ mod tests {
             println!("- {:?} -> {:?} ({}) found={}", e.find, e.replace, e.why, passage.contains(&e.find));
         }
         assert!(result.edits.iter().all(|e| passage.contains(&e.find)));
+    }
+
+    /// Breaks a copy of a paper, compiles it and asks Claude to explain the error:
+    /// `TUHI_TEST_EXPLAIN_PAPER=~/overleaf/trust-align cargo test explains -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn explains_a_real_compile_error() {
+        let source = PathBuf::from(std::env::var("TUHI_TEST_EXPLAIN_PAPER").expect("set TUHI_TEST_EXPLAIN_PAPER"));
+        let root = std::env::temp_dir().join("tuhi-explain-test");
+        let _ = fs::remove_dir_all(&root);
+        latexdiff::copy_tree(&source, &root).unwrap();
+        let main = project::open(&root).unwrap().main.unwrap();
+        let text = fs::read_to_string(root.join(&main)).unwrap();
+        // A typo in a command name inside the first long paragraph.
+        let line = text.lines().position(|l| l.len() > 300 && l.contains("\\cite")).unwrap();
+        let broken: Vec<String> = text.lines().enumerate().map(|(i, l)| if i == line { l.replacen("\\cite", "\\ctie", 1) } else { l.to_string() }).collect();
+        fs::write(root.join(&main), broken.join("\n")).unwrap();
+
+        let out = std::env::temp_dir().join("tuhi-explain-build");
+        let result = compile::compile(&root, &main, &out).unwrap();
+        let error = result.issues.iter().find(|i| i.severity == "error").expect("an error");
+        println!("error: {:?} at {:?}:{:?}", error.message, error.file, error.line);
+        let explained = explain::explain(&root, &error.message, error.file.as_deref(), error.line, &result.log).unwrap();
+        println!("{} (${:.3})", explained.explanation, explained.cost_usd);
+        let fix = explained.fix.expect("a fix");
+        println!("{}:{} {:?} -> {:?}", fix.file, fix.line, fix.before, fix.after);
+        assert!(fix.before.contains("\\ctie") && fix.after.contains("\\cite"));
     }
 }

@@ -1,6 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
+import { checklist, DEFAULT_SETTINGS, lint, type Finding, type Settings } from "./checks";
+import { ChecksPanel } from "./checks-panel";
 import { Citations } from "./citations";
+import { explain } from "./explain";
 import { ClaimsPanel } from "./claims-panel";
 import { Editor } from "./editor";
 import { newId, reanchor, withContext, type Mark } from "./marks";
@@ -41,6 +44,9 @@ const ui = {
   suggestions: $("suggestions"),
   suggestionCount: $("suggestion-count"),
   suggesting: $<HTMLButtonElement>("suggesting"),
+  tabChecks: $("tab-checks"),
+  checks: $("checks"),
+  checkCount: $("check-count"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -53,6 +59,8 @@ let compileLog = "";
 let citeIssues: api.Issue[] = [];
 /** Citations whose verdict says the cited paper doesn't (fully) back the sentence. */
 let claimIssues: api.Issue[] = [];
+/** Consistency lint: spelling, acronyms, notation, macrons. */
+let lintIssues: api.Issue[] = [];
 let compiling = false;
 let compileQueued = false;
 /** taura's report for the open paper; null when it isn't paired with a code repo. */
@@ -151,9 +159,11 @@ async function loadProject(path: string) {
   citations.set(null, "");
   citeIssues = [];
   claimIssues = [];
+  lintIssues = [];
   showIssues([], "");
 
   await loadSidecar(project.root);
+  await loadSettings(project.root);
   await reviewPanel.setProject(project.root, project.main);
   taura = null;
   void refreshProvenance();
@@ -362,6 +372,130 @@ async function askClaude(instruction: string) {
   }
 }
 
+// Checks (.tuhi/settings.json)
+
+const SETTINGS = ".tuhi/settings.json";
+let settings: Settings = { ...DEFAULT_SETTINGS };
+let checksRun = 0;
+
+async function loadSettings(root: string) {
+  settings = { ...DEFAULT_SETTINGS };
+  try {
+    settings = { ...DEFAULT_SETTINGS, ...JSON.parse(await api.readText(root, SETTINGS)) };
+  } catch {}
+  checksPanel.setSettings(settings);
+}
+
+const checksPanel = new ChecksPanel(ui.checks, {
+  jump: (file, line) => void openFile(file, line).catch(report),
+  fix: (findings) => void applyFixes(findings),
+  saveSettings: (next) => {
+    settings = next;
+    if (project) void api.writeText(project.root, SETTINGS, JSON.stringify(settings, null, 2) + "\n").catch(report);
+    void runChecks();
+  },
+  rerun: () => void runChecks(),
+});
+
+/** Runs the checklist and consistency lint over the editor's text (saved or not). */
+async function runChecks() {
+  if (!project?.main) return;
+  const { root, main, files } = project;
+  const run = ++checksRun;
+  const texts = new Map<string, string>();
+  await Promise.all(
+    files
+      .filter((f) => f.endsWith(".tex"))
+      .map(async (f) => texts.set(f, editor.has(f) ? editor.text(f) : await api.readText(root, f).catch(() => "")))
+  );
+  const found = lint(main, texts);
+  const items = checklist({
+    main,
+    texts,
+    settings,
+    pages: preview.pageCount(),
+    referencesPage: await preview.referencesPage().catch(() => null),
+    issues: compileIssues,
+    lint: found,
+  });
+  if (run !== checksRun || project?.root !== root) return;
+  checksPanel.set(items, found);
+  const failing = items.filter((i) => i.status === "fail" || i.status === "warn").length;
+  ui.checkCount.textContent = failing ? String(failing) : "";
+  lintIssues = found
+    .filter((f) => f.severity !== "info" || f.fix)
+    .map((f) => ({ severity: f.severity === "error" ? "warning" : f.severity, file: f.file, line: f.line, message: `${f.group}: ${f.message}`, fix: f.fix }));
+  showIssues(compileIssues, compileLog);
+}
+
+/** Applies lint fixes in the editor (⌘S to save), then checks again. */
+async function applyFixes(findings: Finding[]) {
+  let applied = 0;
+  // Bottom of each file first, so earlier fixes don't move later lines.
+  for (const f of [...findings].sort((a, b) => a.file.localeCompare(b.file) || b.line - a.line)) {
+    if (!f.fix) continue;
+    await ensureLoaded(f.file);
+    if (editor.replace(f.file, f.fix.find, f.fix.replace, f.line) !== null) applied++;
+  }
+  if (findings.length === 1 && findings[0].line) await openFile(findings[0].file, findings[0].line);
+  setStatus(`Fixed ${applied} of ${findings.length} · ⌘S to save`, applied < findings.length);
+  await runChecks();
+}
+
+// Compile errors explained
+
+function explainRow(issue: api.Issue): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "explain";
+  const known = explain(issue.message);
+  if (known) {
+    const p = document.createElement("p");
+    p.textContent = known;
+    box.append(p);
+  }
+  const ask = document.createElement("button");
+  ask.textContent = known ? "Ask Claude for the fix" : "Ask Claude what's wrong";
+  ask.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!project) return;
+    ask.disabled = true;
+    ask.textContent = "Claude is reading the log…";
+    try {
+      const file = issue.file ?? (issue.line ? project.main : null);
+      const result = await api.explainError(project.root, issue.message, file, issue.line, compileLog);
+      const p = document.createElement("p");
+      p.textContent = `${result.explanation} ($${result.cost_usd.toFixed(2)})`;
+      ask.replaceWith(p);
+      if (result.fix) {
+        const fix = result.fix;
+        const diff = document.createElement("pre");
+        diff.className = "explain-fix";
+        diff.textContent = `${fix.file}:${fix.line}\n− ${fix.before}\n+ ${fix.after}`;
+        const apply = document.createElement("button");
+        apply.className = "primary";
+        apply.textContent = "Apply fix";
+        apply.addEventListener("click", async (ev) => {
+          ev.stopPropagation();
+          await ensureLoaded(fix.file);
+          const line = editor.replace(fix.file, fix.before, fix.after, fix.line);
+          if (line === null) return setStatus("The source changed; the fix no longer matches", true);
+          await openFile(fix.file, line);
+          apply.disabled = true;
+          apply.textContent = "Applied · ⌘S to save and compile";
+        });
+        box.append(diff, apply);
+      }
+    } catch (error) {
+      ask.disabled = false;
+      ask.textContent = "Ask Claude again";
+      report(error);
+    }
+  });
+  box.append(ask);
+  box.addEventListener("click", (e) => e.stopPropagation());
+  return box;
+}
+
 // Compiling
 
 async function saveDirty(): Promise<boolean> {
@@ -403,6 +537,7 @@ async function runCompile() {
     void refreshProvenance();
     void refreshCitations(true);
     void claimsPanel.reload();
+    void runChecks();
     const errors = result.issues.filter((i) => i.severity === "error").length;
     const seconds = (result.millis / 1000).toFixed(1);
     if (errors) setStatus(`${errors} error${errors > 1 ? "s" : ""} · ${seconds}s`, true);
@@ -569,7 +704,7 @@ function weakClaims(doc: api.ClaimsDocument): api.Issue[] {
 function showIssues(next: api.Issue[], log: string) {
   compileIssues = next;
   compileLog = log;
-  issues = [...next, ...citeIssues, ...claimIssues];
+  issues = [...next, ...citeIssues, ...claimIssues, ...lintIssues];
   ui.log.textContent = log;
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.filter((i) => i.severity === "warning").length;
@@ -591,6 +726,28 @@ function showIssues(next: api.Issue[], log: string) {
       const message = document.createElement("span");
       message.textContent = issue.message;
       li.append(sev, where, message);
+      if (issue.severity === "error" && !issue.message.startsWith("BibTeX") && compileIssues.includes(issue)) {
+        const why = document.createElement("button");
+        why.className = "problem-action";
+        why.textContent = "Explain";
+        why.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const open = li.querySelector(".explain");
+          if (open) open.remove();
+          else li.append(explainRow(issue));
+        });
+        li.append(why);
+      }
+      if (issue.fix && issue.file && issue.line) {
+        const fix = document.createElement("button");
+        fix.className = "problem-action";
+        fix.textContent = `Fix: ${issue.fix.replace}`;
+        fix.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void applyFixes([{ file: issue.file!, line: issue.line!, severity: issue.severity, group: "", message: issue.message, fix: issue.fix }]);
+        });
+        li.append(fix);
+      }
       // Warnings without a file usually come from the main file.
       const file = issue.file ?? (issue.line ? project?.main : null);
       if (file && issue.line) {
@@ -615,7 +772,7 @@ function showProblemsInEditor() {
   editor.setProblems(
     issues
       .filter((i) => i.line && (i.file === file || (!i.file && i.severity !== "info" && file === project?.main)))
-      .map((i) => ({ line: i.line!, severity: i.severity, message: i.message })),
+      .map((i) => ({ line: i.line!, severity: i.severity, message: i.message, fix: i.fix })),
   );
 }
 
@@ -627,7 +784,7 @@ function selectTab(log: boolean) {
   ui.problems.classList.remove("collapsed");
 }
 
-type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions";
+type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions" | "checks";
 
 function showSide(side: Side) {
   ui.tabPdf.classList.toggle("active", side === "pdf");
@@ -640,6 +797,8 @@ function showSide(side: Side) {
   ui.claims.hidden = side !== "claims";
   ui.tabSuggestions.classList.toggle("active", side === "suggestions");
   ui.suggestions.hidden = side !== "suggestions";
+  ui.tabChecks.classList.toggle("active", side === "checks");
+  ui.checks.hidden = side !== "checks";
 }
 
 // Wiring
@@ -649,6 +808,10 @@ ui.tabReview.addEventListener("click", () => showSide("review"));
 ui.tabProvenance.addEventListener("click", () => showSide("provenance"));
 ui.tabClaims.addEventListener("click", () => showSide("claims"));
 ui.tabSuggestions.addEventListener("click", () => showSide("suggestions"));
+ui.tabChecks.addEventListener("click", () => {
+  showSide("checks");
+  void runChecks();
+});
 ui.suggesting.addEventListener("click", () => setSuggesting(!editor.isSuggesting()));
 ui.open.addEventListener("click", () => void chooseProject().catch(report));
 ui.compile.addEventListener("click", () => void saveAndCompile());

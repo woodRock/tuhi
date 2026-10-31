@@ -12,6 +12,8 @@ export interface Issue {
   file: string | null;
   line: number | null;
   message: string;
+  /** Consistency lint only: replaces the first `find` on the line. */
+  fix?: { find: string; replace: string };
 }
 
 export interface CompileResult {
@@ -298,3 +300,13 @@ export interface SuggestedEdit {
 /** Claude's edits to a selected passage; `before`/`after` are context it mustn't edit. */
 export const suggestEdits = (root: string, file: string, passage: string, before: string, after: string, instruction: string) =>
   invoke<{ summary: string; edits: SuggestedEdit[]; cost_usd: number }>("suggest_edits", { root, file, passage, before, after, instruction });
+
+export interface ErrorExplanation {
+  explanation: string;
+  /** A source edit that fixes it; `before` is the exact text it replaces. */
+  fix: { file: string; line: number; before: string; after: string } | null;
+  cost_usd: number;
+}
+
+export const explainError = (root: string, message: string, file: string | null, line: number | null, log: string) =>
+  invoke<ErrorExplanation>("explain_error", { root, message, file, line, log });
