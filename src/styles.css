@@ -176,6 +176,9 @@ button.primary {
 .side-tabs {
   display: flex;
   gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
   padding: 3px 6px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
@@ -1253,4 +1256,173 @@ button.primary {
   border-radius: 4px;
   white-space: pre-wrap;
   font-size: 12px;
+}
+
+.side-tabs .tab {
+  flex-shrink: 0;
+}
+
+/* Outline tab */
+.outline-row {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.outline-row.level-2 {
+  padding-left: 22px;
+}
+
+.outline-row.level-3 {
+  padding-left: 36px;
+}
+
+.outline-row.level-1,
+.outline-total {
+  font-weight: 600;
+}
+
+.outline-total {
+  background: var(--bg);
+  border-radius: 6px;
+  border-bottom: none;
+  margin-bottom: 6px;
+}
+
+.outline-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.outline-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+}
+
+.outline-title:disabled {
+  opacity: 1;
+}
+
+.outline-counts {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.outline-inputs {
+  display: flex;
+  gap: 4px;
+}
+
+.outline-budget {
+  width: 58px;
+  font: inherit;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.outline-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.outline-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.outline-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.outline-bar.near .outline-fill {
+  background: var(--warning);
+}
+
+.outline-bar.over .outline-fill {
+  background: var(--error);
+}
+
+.outline-left {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Versions tab */
+.versions-name {
+  flex: 1;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.versions-compare {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.versions-compare select {
+  max-width: 100%;
+}
+
+.versions-result {
+  margin-top: 8px;
+}
+
+.versions-files {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.versions-file {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.versions-path {
+  flex: 1;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.versions-add {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.versions-del {
+  color: var(--error);
+  font-variant-numeric: tabular-nums;
 }

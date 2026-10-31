@@ -7,6 +7,9 @@ import { explain } from "./explain";
 import { ClaimsPanel } from "./claims-panel";
 import { Editor } from "./editor";
 import { newId, reanchor, withContext, type Mark } from "./marks";
+import { outline } from "./outline";
+import { OutlinePanel } from "./outline-panel";
+import { VersionsPanel } from "./versions-panel";
 import { SuggestionsPanel, type Entry } from "./suggestions-panel";
 import { Preview } from "./preview";
 import { ReviewPanel } from "./review";
@@ -47,6 +50,10 @@ const ui = {
   tabChecks: $("tab-checks"),
   checks: $("checks"),
   checkCount: $("check-count"),
+  tabOutline: $("tab-outline"),
+  outline: $("outline"),
+  tabVersions: $("tab-versions"),
+  versions: $("versions"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -164,6 +171,7 @@ async function loadProject(path: string) {
 
   await loadSidecar(project.root);
   await loadSettings(project.root);
+  void versionsPanel.setProject(project.root);
   await reviewPanel.setProject(project.root, project.main);
   taura = null;
   void refreshProvenance();
@@ -393,6 +401,7 @@ const checksPanel = new ChecksPanel(ui.checks, {
     settings = next;
     if (project) void api.writeText(project.root, SETTINGS, JSON.stringify(settings, null, 2) + "\n").catch(report);
     void runChecks();
+    if (!ui.outline.hidden) void refreshOutline(true);
   },
   rerun: () => void runChecks(),
 });
@@ -428,6 +437,68 @@ async function runChecks() {
   showIssues(compileIssues, compileLog);
 }
 
+// Outline and section budgets
+
+let outlineRun = 0;
+
+const outlinePanel = new OutlinePanel(ui.outline, {
+  jump: (file, line) => void openFile(file, line).catch(report),
+  setBudget: (key, budget) => {
+    const budgets = { ...settings.budgets };
+    if (budget.words || budget.pages) budgets[key] = budget;
+    else delete budgets[key];
+    settings = { ...settings, budgets };
+    if (project) void api.writeText(project.root, SETTINGS, JSON.stringify(settings, null, 2) + "\n").catch(report);
+    void refreshOutline(false);
+  },
+  refresh: () => void refreshOutline(true),
+});
+
+/** Counts words per section; with `measure`, also each section's pages in the last PDF (SyncTeX). */
+async function refreshOutline(measure: boolean) {
+  if (!project?.main) return;
+  const { root, main, files } = project;
+  const run = ++outlineRun;
+  const texts = new Map<string, string>();
+  await Promise.all(
+    files
+      .filter((f) => f.endsWith(".tex"))
+      .map(async (f) => texts.set(f, editor.has(f) ? editor.text(f) : await api.readText(root, f).catch(() => ""))),
+  );
+  const result = outline(main, texts);
+  const total = preview.pageCount();
+  const height = measure ? await preview.pageHeight() : null;
+  if (height && total) {
+    // Where each heading starts in the PDF, as a page number with a fraction.
+    const at = async (file: string, line: number) => {
+      for (const l of [line, line + 1]) {
+        const boxes = await api.synctexForward(root, main, file, l, 1).catch(() => []);
+        if (boxes.length) return boxes[0].page - 1 + Math.max(0, boxes[0].y) / height;
+      }
+      return null;
+    };
+    const starts: (number | null)[] = [];
+    for (const s of result.sections) starts.push(await at(s.file, s.line));
+    const end = result.end ? ((await at(result.end.file, result.end.line)) ?? total) : total;
+    result.sections.forEach((s, i) => {
+      const start = starts[i];
+      if (start === null) return;
+      // Ends where the next section at the same or a higher level starts.
+      let j = i + 1;
+      while (j < result.sections.length && result.sections[j].level > s.level && s.level > 0) j++;
+      const next = j < result.sections.length ? starts[j] : end;
+      if (next !== null && next >= start) s.pages = next - start;
+    });
+    lastPages = new Map(result.sections.map((s) => [`${s.file}:${s.title}`, s.pages]));
+  } else {
+    // Without a fresh measurement, keep the last one.
+    for (const s of result.sections) s.pages = lastPages.get(`${s.file}:${s.title}`);
+  }
+  if (run !== outlineRun || project?.root !== root) return;
+  outlinePanel.set(result, settings.budgets, total);
+}
+let lastPages = new Map<string, number | undefined>();
+
 /** Applies lint fixes in the editor (⌘S to save), then checks again. */
 async function applyFixes(findings: Finding[]) {
   let applied = 0;
@@ -441,6 +512,30 @@ async function applyFixes(findings: Finding[]) {
   setStatus(`Fixed ${applied} of ${findings.length} · ⌘S to save`, applied < findings.length);
   await runChecks();
 }
+
+// Versions
+
+const versionsPanel = new VersionsPanel(ui.versions, {
+  status: (text, error) => setStatus(text, error),
+  saveAll: async () => {
+    if (!(await saveDirty())) throw new Error("Couldn't save your changes");
+  },
+  diff: async (oldRev, newRev) => {
+    if (!project?.main) return;
+    setStatus(`Running latexdiff ${oldRev} → ${newRev ?? "current text"}…`);
+    try {
+      const result = await api.makeDiff(project.root, project.main, oldRev, newRev);
+      if (!result.pdf) {
+        const error = result.issues.find((i) => i.severity === "error");
+        throw new Error(`The diff didn't compile${error ? `: ${error.message}` : ""}`);
+      }
+      await api.openPath(result.pdf);
+      setStatus("Diff PDF opened");
+    } catch (error) {
+      report(error);
+    }
+  },
+});
 
 // Compile errors explained
 
@@ -784,7 +879,7 @@ function selectTab(log: boolean) {
   ui.problems.classList.remove("collapsed");
 }
 
-type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions" | "checks";
+type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions" | "checks" | "outline" | "versions";
 
 function showSide(side: Side) {
   ui.tabPdf.classList.toggle("active", side === "pdf");
@@ -799,6 +894,10 @@ function showSide(side: Side) {
   ui.suggestions.hidden = side !== "suggestions";
   ui.tabChecks.classList.toggle("active", side === "checks");
   ui.checks.hidden = side !== "checks";
+  ui.tabOutline.classList.toggle("active", side === "outline");
+  ui.outline.hidden = side !== "outline";
+  ui.tabVersions.classList.toggle("active", side === "versions");
+  ui.versions.hidden = side !== "versions";
 }
 
 // Wiring
@@ -808,6 +907,14 @@ ui.tabReview.addEventListener("click", () => showSide("review"));
 ui.tabProvenance.addEventListener("click", () => showSide("provenance"));
 ui.tabClaims.addEventListener("click", () => showSide("claims"));
 ui.tabSuggestions.addEventListener("click", () => showSide("suggestions"));
+ui.tabOutline.addEventListener("click", () => {
+  showSide("outline");
+  void refreshOutline(true);
+});
+ui.tabVersions.addEventListener("click", () => {
+  showSide("versions");
+  void versionsPanel.reload();
+});
 ui.tabChecks.addEventListener("click", () => {
   showSide("checks");
   void runChecks();

@@ -104,6 +104,12 @@ export class Preview {
   }
 
   /** Draws the SyncTeX boxes for a source line and scrolls the first one into view. */
+  /** Height of the first page in PDF points, the unit SyncTeX positions use. */
+  async pageHeight(): Promise<number | null> {
+    if (!this.doc) return null;
+    return (await this.doc.getPage(1)).getViewport({ scale: 1 }).height;
+  }
+
   /** Pages in the loaded PDF, or null. */
   pageCount(): number | null {
     return this.doc?.numPages ?? null;

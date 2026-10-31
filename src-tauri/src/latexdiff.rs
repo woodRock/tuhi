@@ -15,7 +15,7 @@ pub struct Revision {
     pub refs: String,
 }
 
-fn git(root: &Path) -> Result<Command, String> {
+pub(crate) fn git(root: &Path) -> Result<Command, String> {
     let mut cmd = tools::command("git")?;
     cmd.arg("-C").arg(root);
     Ok(cmd)
@@ -43,41 +43,37 @@ pub fn revisions(root: &Path) -> Result<Vec<Revision>, String> {
         .collect())
 }
 
-/// Builds `<main>-diff.pdf` comparing `rev` with the working tree. Everything happens in a
-/// scratch copy under `work`, so the paper's repo is never touched.
-pub fn make(root: &Path, main: &str, rev: &str, work: &Path) -> Result<compile::CompileResult, String> {
+/// Revisions and snapshot names are passed to git as arguments; refuse anything else.
+pub(crate) fn check_rev(rev: &str) -> Result<(), String> {
+    if rev.is_empty() || rev.starts_with('-') || !rev.chars().all(|c| c.is_ascii_alphanumeric() || "-_./~^".contains(c)) {
+        return Err(format!("bad revision {rev:?}"));
+    }
+    Ok(())
+}
+
+/// Builds `<main>-diff.pdf` comparing `rev` with `new_rev`, or with the working tree when that's
+/// None. Everything happens in a scratch copy under `work`, so the paper's repo is never touched.
+pub fn make(root: &Path, main: &str, rev: &str, new_rev: Option<&str>, work: &Path) -> Result<compile::CompileResult, String> {
     if tools::which("latexdiff").is_none() {
         return Err("latexdiff isn't installed. Install it with: sudo tlmgr install latexdiff".into());
     }
-    if !rev.chars().all(|c| c.is_ascii_alphanumeric() || "-_./~^".contains(c)) {
-        return Err(format!("bad revision {rev:?}"));
+    check_rev(rev)?;
+    if let Some(new_rev) = new_rev {
+        check_rev(new_rev)?;
     }
     let _ = fs::remove_dir_all(work);
     let old = work.join("old");
     let new = work.join("new");
-    fs::create_dir_all(&old).map_err(|e| e.to_string())?;
 
     // The old version, straight from git.
-    let mut archive = git(root)?
-        .args(["archive", "--format=tar", rev])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let untar = tools::command("tar")?
-        .arg("-x")
-        .arg("-C")
-        .arg(&old)
-        .stdin(archive.stdout.take().ok_or("git archive gave no output")?)
-        .output()
-        .map_err(|e| e.to_string())?;
-    let archived = archive.wait_with_output().map_err(|e| e.to_string())?;
-    if !archived.status.success() || !untar.status.success() {
-        return Err(format!("couldn't check out {rev}: {}", String::from_utf8_lossy(&archived.stderr).trim()));
-    }
+    archive(root, rev, &old)?;
 
-    // The current version, including figures and generated files the diff needs to compile.
-    copy_tree(root, &new)?;
+    // The new version: another revision, or the current files including figures and generated
+    // files the diff needs to compile.
+    match new_rev {
+        Some(new_rev) => archive(root, new_rev, &new)?,
+        None => copy_tree(root, &new)?,
+    }
 
     let stem = Path::new(main).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let diff_name = match Path::new(main).parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -97,6 +93,29 @@ pub fn make(root: &Path, main: &str, rev: &str, work: &Path) -> Result<compile::
     }
     fs::write(new.join(&diff_name), &output.stdout).map_err(|e| e.to_string())?;
     compile::compile(&new, &diff_name, &work.join("out"))
+}
+
+/// Extracts a revision's files into `dest`.
+fn archive(root: &Path, rev: &str, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let mut archive = git(root)?
+        .args(["archive", "--format=tar", rev])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let untar = tools::command("tar")?
+        .arg("-x")
+        .arg("-C")
+        .arg(dest)
+        .stdin(archive.stdout.take().ok_or("git archive gave no output")?)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let archived = archive.wait_with_output().map_err(|e| e.to_string())?;
+    if !archived.status.success() || !untar.status.success() {
+        return Err(format!("couldn't check out {rev}: {}", String::from_utf8_lossy(&archived.stderr).trim()));
+    }
+    Ok(())
 }
 
 pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {

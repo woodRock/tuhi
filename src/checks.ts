@@ -31,9 +31,16 @@ export interface Settings {
   limitExcludesReferences: boolean;
   /** Double-blind review: the PDF must not identify the authors. */
   doubleBlind: boolean;
+  /** Targets by section title, plus "@abstract" and "@total". */
+  budgets: Record<string, Budget>;
 }
 
-export const DEFAULT_SETTINGS: Settings = { pageLimit: null, limitExcludesReferences: false, doubleBlind: false };
+export interface Budget {
+  words?: number | null;
+  pages?: number | null;
+}
+
+export const DEFAULT_SETTINGS: Settings = { pageLimit: null, limitExcludesReferences: false, doubleBlind: false, budgets: {} };
 
 // Reading order
 
@@ -231,12 +238,12 @@ export function maskProse(text: string): string {
 
 // Words, keeping hyphenated compounds together.
 const WORD = /[\p{L}\u00ad]+(?:-[\p{L}\u00ad]+)*/gu;
-const lineStarts = (text: string) => {
+export const lineStarts = (text: string) => {
   const starts = [0];
   for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
   return starts;
 };
-const lineAt = (starts: number[], offset: number) => {
+export const lineAt = (starts: number[], offset: number) => {
   let lo = 0;
   let hi = starts.length - 1;
   while (lo < hi) {

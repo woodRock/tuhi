@@ -7,6 +7,7 @@ mod latexdiff;
 mod letter;
 mod project;
 mod review;
+mod snapshots;
 mod suggest;
 mod synctex;
 mod ruru;
@@ -175,14 +176,20 @@ fn git_revisions(root: String) -> Result<Vec<latexdiff::Revision>, String> {
 }
 
 #[tauri::command]
-async fn make_diff(app: AppHandle, root: String, main: String, rev: String) -> Result<compile::CompileResult, String> {
+async fn make_diff(
+    app: AppHandle,
+    root: String,
+    main: String,
+    rev: String,
+    new_rev: Option<String>,
+) -> Result<compile::CompileResult, String> {
     let root = PathBuf::from(root);
     let build = build_dir(&app, &root)?;
     let work = build.with_file_name(format!(
         "{}-diff",
         build.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     ));
-    tauri::async_runtime::spawn_blocking(move || latexdiff::make(&root, &main, &rev, &work))
+    tauri::async_runtime::spawn_blocking(move || latexdiff::make(&root, &main, &rev, new_rev.as_deref(), &work))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -290,6 +297,32 @@ async fn explain_error(
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn snapshots_list(root: String) -> Result<Vec<snapshots::Snapshot>, String> {
+    snapshots::list(Path::new(&root))
+}
+
+/// Records the files as they are now under a name, without committing to the branch.
+#[tauri::command]
+async fn snapshot_create(root: String, name: String) -> Result<snapshots::Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || snapshots::create(Path::new(&root), &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn snapshot_delete(root: String, id: String) -> Result<(), String> {
+    snapshots::delete(Path::new(&root), &id)
+}
+
+/// Lines changed per file between two revisions (`new` None: the current files).
+#[tauri::command]
+async fn version_changes(root: String, old: String, new: Option<String>) -> Result<Vec<snapshots::FileChange>, String> {
+    tauri::async_runtime::spawn_blocking(move || snapshots::changes(Path::new(&root), &old, new.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -323,6 +356,10 @@ pub fn run() {
             claims_record,
             suggest_edits,
             explain_error,
+            snapshots_list,
+            snapshot_create,
+            snapshot_delete,
+            version_changes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -395,7 +432,7 @@ mod tests {
 
         let revs = latexdiff::revisions(&root).unwrap();
         println!("HEAD {} {} [{}]", revs[0].rev, revs[0].subject, revs[0].refs);
-        match latexdiff::make(&root, "TAI_template.tex", &revs[0].rev, &std::env::temp_dir().join("tuhi-test-diff")) {
+        match latexdiff::make(&root, "TAI_template.tex", &revs[0].rev, None, &std::env::temp_dir().join("tuhi-test-diff")) {
             Ok(r) => println!("diff ok={} pdf={:?}", r.ok, r.pdf),
             Err(e) => println!("diff error: {e}"),
         }
@@ -520,5 +557,38 @@ mod tests {
         let fix = explained.fix.expect("a fix");
         println!("{}:{} {:?} -> {:?}", fix.file, fix.line, fix.before, fix.after);
         assert!(fix.before.contains("\\ctie") && fix.after.contains("\\cite"));
+    }
+
+    /// Snapshots a clone of a real paper and diffs two versions with latexdiff:
+    /// `TUHI_TEST_GIT_PROJECT=~/overleaf/trust-align cargo test snapshot_and_diff -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn snapshot_and_diff_real_project() {
+        let source = PathBuf::from(std::env::var("TUHI_TEST_GIT_PROJECT").expect("set TUHI_TEST_GIT_PROJECT"));
+        let root = std::env::temp_dir().join("tuhi-snapshot-test");
+        let _ = fs::remove_dir_all(&root);
+        let cloned = std::process::Command::new("git").args(["clone", "-q"]).arg(&source).arg(&root).status().unwrap();
+        assert!(cloned.success());
+        let main = project::open(&root).unwrap().main.unwrap();
+        let head = |root: &Path| String::from_utf8(std::process::Command::new("git").arg("-C").arg(root).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
+        let before = head(&root);
+
+        let submitted = snapshots::create(&root, "Submitted v1").unwrap();
+        let text = fs::read_to_string(root.join(&main)).unwrap();
+        let edited = text.replacen("\\section{Conclusion}", "\\section{Conclusion}\nThis sentence was added after submission.", 1);
+        assert_ne!(edited, text);
+        fs::write(root.join(&main), edited).unwrap();
+        let revised = snapshots::create(&root, "Revision 1").unwrap();
+        assert_eq!(head(&root), before, "snapshots must not move HEAD");
+        println!("{:?}", snapshots::list(&root).unwrap().iter().map(|s| (&s.id, &s.name, &s.commit)).collect::<Vec<_>>());
+
+        let changes = snapshots::changes(&root, &format!("tuhi/{}", submitted.id), Some(&format!("tuhi/{}", revised.id))).unwrap();
+        println!("changes: {:?}", changes.iter().map(|c| (&c.file, c.added, c.removed)).collect::<Vec<_>>());
+        assert_eq!(changes.len(), 1);
+
+        let work = std::env::temp_dir().join("tuhi-snapshot-diff");
+        let result = latexdiff::make(&root, &main, &format!("tuhi/{}", submitted.id), Some(&format!("tuhi/{}", revised.id)), &work).unwrap();
+        println!("diff pdf: {:?} ({} errors)", result.pdf, result.issues.iter().filter(|i| i.severity == "error").count());
+        assert!(result.pdf.is_some());
     }
 }

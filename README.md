@@ -63,6 +63,24 @@ Only files the main file reaches through `\input` and `\include` are checked.
 straight away. **Ask Claude** reads the log and source and proposes the fix, which **Apply fix**
 makes in the editor (⌘S to save and recompile); about $0.05.
 
+### Section budgets
+
+The **Outline** tab lists the sections in reading order (following `\input`) with their words
+and pages. Words count the text, including numbers, but not maths, tables or references; a
+section's count includes its subsections. Pages come from where each heading lands in the last
+PDF (SyncTeX), as fractions of a page. Set a word or page budget on any section, the abstract or
+the whole paper, and a bar shows how close each is: amber within 10%, red over. Budgets are
+saved in `.tuhi/settings.json`.
+
+### Versions
+
+The **Versions** tab keeps named snapshots such as "Submitted v1" or "Revision 1". A snapshot
+records every file exactly as it is, saved or committed or not, as a git tag `tuhi/<name>`. It
+doesn't commit to your branch or change the index or working tree, and the tag stays local
+unless you push it with `--tags`. **Compare** any two versions, or one against the current text:
+**Changes** lists the lines added and removed per file, and **Diff PDF** opens a latexdiff
+PDF. Deleting a snapshot removes only its tag.
+
 ### Reviewer comments
 
 The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
@@ -167,6 +185,7 @@ TUHI_TEST_PROJECT=~/overleaf/trust-align cargo test -- --ignored --nocapture
 TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored --nocapture
 TUHI_TEST_SUGGEST_PAPER=~/overleaf/trust-align cargo test suggests_edits -- --ignored --nocapture
 TUHI_TEST_EXPLAIN_PAPER=~/overleaf/trust-align cargo test explains -- --ignored --nocapture
+TUHI_TEST_GIT_PROJECT=~/overleaf/trust-align cargo test snapshot_and_diff -- --ignored --nocapture
 # judges one claim with Claude and records it in a copy of the library
 TUHI_TEST_CLAIMS_PAPER=~/overleaf/trust-align TUHI_RURU_LIBRARY=/tmp/papers-copy cargo test claims_judge -- --ignored --nocapture
 ```

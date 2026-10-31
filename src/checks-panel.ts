@@ -51,6 +51,7 @@ export class ChecksPanel {
     blind.checked = settings.doubleBlind;
     const save = () =>
       this.hooks.saveSettings({
+        ...settings,
         pageLimit: Number(limit.value) > 0 ? Math.round(Number(limit.value)) : null,
         limitExcludesReferences: excludes.checked,
         doubleBlind: blind.checked,

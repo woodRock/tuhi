@@ -132,7 +132,9 @@ export const writeLetter = (root: string, main: string, review: unknown) =>
 export const gitRevisions = (root: string) => invoke<Revision[]>("git_revisions", { root });
 
 /** latexdiff of `rev` against the working tree, compiled to PDF. */
-export const makeDiff = (root: string, main: string, rev: string) => invoke<CompileResult>("make_diff", { root, main, rev });
+/** latexdiff from `rev` to `newRev`, or to the current files when that's omitted. */
+export const makeDiff = (root: string, main: string, rev: string, newRev: string | null = null) =>
+  invoke<CompileResult>("make_diff", { root, main, rev, newRev });
 
 export const openPath = (path: string) => invoke<void>("open_path", { path });
 
@@ -310,3 +312,25 @@ export interface ErrorExplanation {
 
 export const explainError = (root: string, message: string, file: string | null, line: number | null, log: string) =>
   invoke<ErrorExplanation>("explain_error", { root, message, file, line, log });
+
+export interface Snapshot {
+  /** The tag is `tuhi/<id>`. */
+  id: string;
+  name: string;
+  date: string;
+  commit: string;
+}
+
+export interface FileChange {
+  file: string;
+  /** null for binary files. */
+  added: number | null;
+  removed: number | null;
+}
+
+export const snapshotsList = (root: string) => invoke<Snapshot[]>("snapshots_list", { root });
+export const snapshotCreate = (root: string, name: string) => invoke<Snapshot>("snapshot_create", { root, name });
+export const snapshotDelete = (root: string, id: string) => invoke<void>("snapshot_delete", { root, id });
+/** `newRev` null: compare with the current files. */
+export const versionChanges = (root: string, old: string, newRev: string | null) =>
+  invoke<FileChange[]>("version_changes", { root, old, new: newRev });
