@@ -55,6 +55,17 @@ const reviewPanel = new ReviewPanel(ui.review, {
     if (changed !== null) await openFile(file, changed);
     return changed;
   },
+  sourceText: async (file) => (editor.has(file) ? editor.text(file) : project ? api.readText(project.root, file) : ""),
+  saveAll: async () => {
+    if (!(await saveDirty())) throw new Error("Couldn't save your changes");
+  },
+  refreshFiles: async () => {
+    if (!project) return;
+    const fresh = await api.openProject(project.root);
+    project.files = fresh.files;
+    ui.file.replaceChildren(...project.files.map((f) => new Option(f, f)));
+    if (editor.file) ui.file.value = editor.file;
+  },
 });
 
 function setStatus(text: string, error = false) {
@@ -109,8 +120,8 @@ async function openFile(file: string, line?: number, column?: number) {
 
 // Compiling
 
-async function saveAndCompile() {
-  if (!project) return;
+async function saveDirty(): Promise<boolean> {
+  if (!project) return false;
   try {
     for (const file of editor.dirtyFiles()) {
       const text = editor.text(file);
@@ -118,11 +129,15 @@ async function saveAndCompile() {
       editor.markSaved(file, text);
     }
     ui.dirty.hidden = true;
+    return true;
   } catch (error) {
     report(error);
-    return;
+    return false;
   }
-  await runCompile();
+}
+
+async function saveAndCompile() {
+  if (await saveDirty()) await runCompile();
 }
 
 async function runCompile() {

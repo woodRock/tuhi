@@ -115,3 +115,21 @@ export interface Proposal {
 
 /** Runs one Claude session for the card; takes tens of seconds. */
 export const draftChange = (root: string, card: unknown) => invoke<Proposal>("draft_change", { root, card });
+
+export interface Revision {
+  rev: string;
+  date: string;
+  subject: string;
+  refs: string;
+}
+
+/** Writes response/<round>.tex and returns its root-relative path. */
+export const writeLetter = (root: string, main: string, review: unknown) =>
+  invoke<string>("write_letter", { root, main, review });
+
+export const gitRevisions = (root: string) => invoke<Revision[]>("git_revisions", { root });
+
+/** latexdiff of `rev` against the working tree, compiled to PDF. */
+export const makeDiff = (root: string, main: string, rev: string) => invoke<CompileResult>("make_diff", { root, main, rev });
+
+export const openPath = (path: string) => invoke<void>("open_path", { path });

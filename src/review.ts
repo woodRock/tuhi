@@ -35,6 +35,8 @@ export interface Review {
   id: string;
   label: string;
   created: string;
+  /** The git commit when the round started, i.e. the submitted version; latexdiff's base. */
+  base?: string;
   cards: Card[];
 }
 
@@ -45,7 +47,20 @@ export interface ReviewHooks {
   status(text: string, error?: boolean): void;
   /** Replaces `before` with `after` in the editor; returns the line changed, or null if not found. */
   applyEdit(file: string, before: string, after: string, line: number): Promise<number | null>;
+  /** A file's current text, including unsaved edits. */
+  sourceText(file: string): Promise<string>;
+  /** Saves unsaved edits so the letter and diff see them. */
+  saveAll(): Promise<void>;
+  /** Re-reads the project's file list, e.g. after writing the letter. */
+  refreshFiles(): Promise<void>;
 }
+
+interface Problem {
+  card?: Card;
+  text: string;
+}
+
+const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
 
 const STATUS_LABELS: Record<Status, string> = {
   open: "Open",
@@ -73,6 +88,12 @@ export class ReviewPanel {
   private saveTimer = 0;
   /** Cards with a Claude session running. */
   private drafting = new Set<Card>();
+  private revisions: api.Revision[] = [];
+  private busy = false;
+
+  private finish = el("div", "review-finish");
+  private baseSelect = el("select", "base-select");
+  private problems = el("div", "check-results");
 
   private select = el("select");
   private counts = el("span", "review-counts");
@@ -113,7 +134,34 @@ export class ReviewPanel {
     this.pasteBox.append(this.pasteText, actions);
     this.pasteBox.hidden = true;
 
-    container.append(bar, this.counts, this.pasteBox, this.list);
+    const checkButton = el("button", "", "Check");
+    checkButton.title = "List comments that aren't resolved yet";
+    const letterButton = el("button", "", "Response letter");
+    letterButton.title = "Write response/<round>.tex from the replies and accepted edits, and open the PDF";
+    const diffButton = el("button", "", "Diff PDF");
+    diffButton.title = "latexdiff of the chosen commit against the current text";
+    this.baseSelect.title = "Compare against this commit (defaults to the one current when the round started)";
+    this.finish.append(checkButton, letterButton, diffButton, el("span", "finish-label", "against"), this.baseSelect);
+    this.problems.hidden = true;
+
+    const run = (task: () => Promise<void>) => async () => {
+      if (this.busy) return;
+      this.busy = true;
+      this.finish.classList.add("busy");
+      try {
+        await task();
+      } catch (error) {
+        this.hooks.status(String(error), true);
+      } finally {
+        this.busy = false;
+        this.finish.classList.remove("busy");
+      }
+    };
+    checkButton.addEventListener("click", run(() => this.check().then(() => undefined)));
+    letterButton.addEventListener("click", run(() => this.writeLetter()));
+    diffButton.addEventListener("click", run(() => this.makeDiff()));
+
+    container.append(bar, this.counts, this.finish, this.problems, this.pasteBox, this.list);
 
     this.select.addEventListener("change", () => {
       this.review = this.reviews.find((r) => r.id === this.select.value) ?? null;
@@ -129,7 +177,7 @@ export class ReviewPanel {
     draftAllButton.addEventListener("click", () => void this.draftAll());
     newButton.addEventListener("click", () => {
       if (!this.root) return;
-      this.review = this.newReview();
+      this.review = this.newRound();
       this.reviews.push(this.review);
       this.save();
       this.render();
@@ -142,6 +190,8 @@ export class ReviewPanel {
     this.main = main;
     this.reviews = await api.listReviews<Review>(root);
     this.review = this.reviews.at(-1) ?? null;
+    this.problems.hidden = true;
+    this.revisions = await api.gitRevisions(root).catch(() => []);
     this.render();
   }
 
@@ -152,10 +202,17 @@ export class ReviewPanel {
 
   private current(): Review {
     if (!this.review) {
-      this.review = this.newReview();
+      this.review = this.newRound();
       this.reviews.push(this.review);
     }
     return this.review;
+  }
+
+  private newRound(): Review {
+    const review = this.newReview();
+    // The commit at the start of the round is normally the submitted version.
+    review.base = this.revisions[0]?.rev;
+    return review;
   }
 
   /** The next free reviewer group, e.g. "R3" when R1 and R2 exist. */
@@ -315,6 +372,97 @@ export class ReviewPanel {
     else card.status = "open";
   }
 
+  /** Lists everything that would leave a reviewer comment unanswered. */
+  private async check(): Promise<Problem[]> {
+    const review = this.review;
+    if (!review || !this.root) return [];
+    const problems: Problem[] = [];
+    for (const card of review.cards) {
+      const accepted = card.proposal?.hunks.filter((h) => h.state === "accepted") ?? [];
+      if (card.status === "open") problems.push({ card, text: "not addressed yet" });
+      else if (card.status === "proposed") problems.push({ card, text: "has a draft waiting for review" });
+      else if (card.status === "wontfix" && !card.reason?.trim()) problems.push({ card, text: "won't fix, but no reason given" });
+      else if (card.status === "accepted") {
+        if (!accepted.length) problems.push({ card, text: "accepted without an accepted edit; fine if you changed it by hand" });
+        if (!(card.response ?? card.proposal?.response ?? "").trim()) problems.push({ card, text: "no reply to the reviewer" });
+      }
+      for (const hunk of accepted) {
+        const source = collapse(await this.hooks.sourceText(hunk.file).catch(() => ""));
+        if (!source.includes(collapse(hunk.after))) {
+          problems.push({ card, text: `the accepted edit at ${hunk.file}:${hunk.line} is no longer in the source` });
+        }
+      }
+    }
+    // Re-read each reviewer PDF so no annotation goes without a card.
+    for (const pdf of new Set(review.cards.map((c) => c.pdf).filter((p): p is string => !!p))) {
+      const marks = await readAnnotations(await api.readBytes(this.root, pdf));
+      const cards = review.cards.filter((c) => c.pdf === pdf).length;
+      if (marks.length > cards) problems.push({ text: `${marks.length - cards} annotation(s) in ${pdf} have no card` });
+    }
+    this.showProblems(problems);
+    return problems;
+  }
+
+  private showProblems(problems: Problem[]) {
+    this.problems.hidden = false;
+    const total = this.review?.cards.length ?? 0;
+    if (!problems.length) {
+      this.problems.className = "check-results ok";
+      this.problems.replaceChildren(el("p", "", `All ${total} comments are resolved.`));
+      return;
+    }
+    this.problems.className = "check-results";
+    const list = el("ul");
+    for (const p of problems) {
+      const item = el("li");
+      if (p.card) {
+        const id = el("button", "card-where", p.card.id);
+        id.addEventListener("click", () => {
+          const target = this.list.querySelector(`[data-card="${CSS.escape(p.card!.id)}"]`);
+          target?.scrollIntoView({ block: "center", behavior: "smooth" });
+          target?.classList.add("pulse");
+          setTimeout(() => target?.classList.remove("pulse"), 1200);
+        });
+        item.append(id, " ");
+      }
+      item.append(p.text);
+      list.append(item);
+    }
+    const close = el("button", "check-close", "×");
+    close.addEventListener("click", () => (this.problems.hidden = true));
+    this.problems.replaceChildren(el("p", "", `${problems.length} to resolve`), close, list);
+  }
+
+  private async writeLetter() {
+    const review = this.review;
+    if (!review || !this.root || !this.main) return;
+    await this.hooks.saveAll();
+    const problems = await this.check();
+    this.hooks.status("Writing the response letter…");
+    const rel = await api.writeLetter(this.root, this.main, review);
+    await this.hooks.refreshFiles();
+    const result = await api.compile(this.root, rel);
+    if (!result.pdf) throw new Error(`${rel} didn't compile; open it to fix`);
+    await api.openPath(result.pdf);
+    this.hooks.status(problems.length ? `Wrote ${rel}; ${problems.length} thing(s) still to resolve, listed above` : `Wrote ${rel}`);
+  }
+
+  private async makeDiff() {
+    if (!this.root || !this.main) return;
+    const rev = this.baseSelect.value;
+    if (!rev) throw new Error("This folder isn't a git repository, so there's nothing to compare against.");
+    await this.hooks.saveAll();
+    this.hooks.status(`Running latexdiff against ${rev}…`);
+    const result = await api.makeDiff(this.root, this.main, rev);
+    if (!result.pdf) {
+      const error = result.issues.find((i) => i.severity === "error");
+      throw new Error(`The diff didn't compile${error ? `: ${error.message}` : ""}`);
+    }
+    await api.openPath(result.pdf);
+    const errors = result.issues.filter((i) => i.severity === "error").length;
+    this.hooks.status(errors ? `Diff PDF opened, with ${errors} LaTeX error(s) in the marked-up file` : "Diff PDF opened");
+  }
+
   private save() {
     const root = this.root;
     const review = this.review;
@@ -328,6 +476,16 @@ export class ReviewPanel {
   private render() {
     this.select.replaceChildren(...this.reviews.map((r) => new Option(r.label, r.id, false, r === this.review)));
     this.select.hidden = this.reviews.length === 0;
+
+    const base = this.review?.base;
+    this.baseSelect.replaceChildren(
+      ...this.revisions.map((r, i) => {
+        const tags = r.refs.split(", ").filter((x) => x.startsWith("tag: ")).map((x) => x.slice(5));
+        const label = `${r.rev} · ${r.date} · ${tags.length ? `[${tags.join(", ")}] ` : ""}${r.subject}`;
+        return new Option(label.length > 70 ? `${label.slice(0, 69)}…` : label, r.rev, false, base ? r.rev === base : i === 0);
+      }),
+    );
+    this.finish.hidden = !this.review?.cards.length;
 
     const cards = this.review?.cards ?? [];
     const tally = (s: Status) => cards.filter((c) => c.status === s).length;
@@ -361,6 +519,7 @@ export class ReviewPanel {
 
   private renderCard(card: Card): HTMLElement {
     const node = el("article", `card status-${card.status}`);
+    node.dataset.card = card.id;
     const head = el("div", "card-head");
     head.append(el("span", "card-id", card.id));
     const meta = [card.kind !== "Comment" ? card.kind : "", card.page ? `p. ${card.page}` : "", card.author ?? ""].filter(Boolean);

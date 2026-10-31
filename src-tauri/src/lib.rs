@@ -1,5 +1,7 @@
 mod compile;
 mod draft;
+mod latexdiff;
+mod letter;
 mod project;
 mod review;
 mod synctex;
@@ -152,6 +154,44 @@ async fn draft_change(root: String, card: serde_json::Value) -> Result<draft::Pr
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn write_letter(root: String, main: String, review: serde_json::Value) -> Result<String, String> {
+    letter::write(Path::new(&root), &main, &review)
+}
+
+#[tauri::command]
+fn git_revisions(root: String) -> Result<Vec<latexdiff::Revision>, String> {
+    latexdiff::revisions(Path::new(&root))
+}
+
+#[tauri::command]
+async fn make_diff(app: AppHandle, root: String, main: String, rev: String) -> Result<compile::CompileResult, String> {
+    let root = PathBuf::from(root);
+    let build = build_dir(&app, &root)?;
+    let work = build.with_file_name(format!(
+        "{}-diff",
+        build.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    ));
+    tauri::async_runtime::spawn_blocking(move || latexdiff::make(&root, &main, &rev, &work))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Opens a file in its default app, e.g. a generated PDF in Preview.
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -171,6 +211,10 @@ pub fn run() {
             split_comments,
             locate_comments,
             draft_change,
+            write_letter,
+            git_revisions,
+            make_diff,
+            open_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -213,6 +257,40 @@ mod tests {
         assert_eq!(found.method, "text");
         let by_position = review::locate(&root, &project.files, &pdf, None, Some((first.page, first.x + 5.0, first.y + 5.0)));
         println!("position -> {:?}", by_position);
+    }
+
+    /// Letter and latexdiff on a git checkout with an edit applied:
+    /// `TUHI_TEST_GIT_PROJECT=/path cargo test letter_and_diff -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn letter_and_diff_real_project() {
+        let root = PathBuf::from(std::env::var("TUHI_TEST_GIT_PROJECT").expect("set TUHI_TEST_GIT_PROJECT"));
+        let after = "mapping from batch $A$ to batch $B$ and then to batch $C$ equals mapping directly from $A$ to $C$. This property holds for any fitted warps, including those distorted by corrupted anchors, so it is a structural guarantee rather than evidence of accuracy.";
+        let review = serde_json::json!({
+            "label": "Revision 1",
+            "cards": [
+                { "id": "R2.1", "group": "R2", "status": "accepted",
+                  "quote": "By construction, the induced batch-to-batch transformations are cycle-consistent:",
+                  "comment": "Is cycle consistency guaranteed under corrupted anchors? 100% sure?",
+                  "response": "Yes, by construction; we now say it is not evidence of accuracy (Section I).",
+                  "proposal": { "hunks": [{ "file": "TAI_template.tex", "line": 43, "before": "mapping from batch $A$ to batch $B$ and then to batch $C$ equals mapping directly from $A$ to $C$.", "after": after, "state": "accepted" }] } },
+                { "id": "R1.1", "group": "R1", "status": "wontfix", "comment": "Add a GPU benchmark.", "reason": "Out of scope; runtime is under a second." },
+                { "id": "R1.2", "group": "R1", "status": "open", "comment": "Typo in Fig_2." }
+            ]
+        });
+        let rel = letter::write(&root, "TAI_template.tex", &review).unwrap();
+        let out = std::env::temp_dir().join("tuhi-test-letter");
+        let compiled = compile::compile(&root, &rel, &out).unwrap();
+        println!("letter {rel}: ok={} pdf={:?} errors={:?}", compiled.ok, compiled.pdf,
+            compiled.issues.iter().filter(|i| i.severity == "error").map(|i| &i.message).collect::<Vec<_>>());
+        assert!(compiled.pdf.is_some());
+
+        let revs = latexdiff::revisions(&root).unwrap();
+        println!("HEAD {} {} [{}]", revs[0].rev, revs[0].subject, revs[0].refs);
+        match latexdiff::make(&root, "TAI_template.tex", &revs[0].rev, &std::env::temp_dir().join("tuhi-test-diff")) {
+            Ok(r) => println!("diff ok={} pdf={:?}", r.ok, r.pdf),
+            Err(e) => println!("diff error: {e}"),
+        }
     }
 
     #[test]

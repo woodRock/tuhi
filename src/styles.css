@@ -660,3 +660,74 @@ button.primary {
 .proposal-cost {
   color: var(--muted);
 }
+
+/* Finishing a round: check, letter, diff */
+
+.review-finish {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.review-finish[hidden] {
+  display: none;
+}
+
+.review-finish.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.finish-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.base-select {
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+}
+
+.check-results {
+  position: relative;
+  margin: 0 10px 8px;
+  padding: 6px 28px 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+  border: 1px solid var(--border);
+}
+
+.check-results.ok {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+
+.check-results[hidden] {
+  display: none;
+}
+
+.check-results p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.check-results ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.check-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  border: none;
+  background: none;
+  color: var(--muted);
+}
+
+.card.pulse {
+  box-shadow: 0 0 0 2px var(--sync);
+}

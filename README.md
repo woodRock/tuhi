@@ -41,6 +41,17 @@ The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
   lets you change the replacement first, **Reject** drops it, **Undo** reverses an accepted
   hunk. A card becomes Accepted once every hunk is decided and at least one was accepted.
 
+- **Check** lists everything still unresolved: open or proposed comments, won't-fix without a
+  reason, accepted cards with no reply or no accepted edit, accepted edits that have since
+  disappeared from the source, and annotations in a reviewer's PDF that have no card.
+- **Response letter** writes `response/<round>.tex` (editable, in the repo) from the replies
+  and accepted edits, quoting each change with its section and line, compiles it and opens
+  the PDF. Anything unresolved is marked in red.
+- **Diff PDF** runs `latexdiff --flatten` between a git commit and the current text and opens
+  the marked-up PDF. It defaults to the commit that was current when the round started,
+  normally the submitted version. It works in a scratch copy, so the repo isn't touched.
+  Needs `latexdiff` (`sudo tlmgr install latexdiff` on BasicTeX).
+
 Reviews are saved in the paper's repo under `.tuhi/reviews/`, alongside a copy of each
 annotated PDF.
 
