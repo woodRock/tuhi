@@ -5,6 +5,7 @@ mod letter;
 mod project;
 mod review;
 mod synctex;
+mod taura;
 mod tools;
 
 use std::fs;
@@ -192,6 +193,21 @@ fn open_path(path: String) -> Result<(), String> {
     cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// taura's status, findings and pending publish changes; None if the paper isn't paired.
+#[tauri::command]
+async fn taura_report(root: String) -> Result<Option<taura::Report>, String> {
+    tauri::async_runtime::spawn_blocking(move || taura::report(Path::new(&root)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn taura_trace(root: String, target: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || taura::trace(Path::new(&root), &target))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -215,6 +231,8 @@ pub fn run() {
             git_revisions,
             make_diff,
             open_path,
+            taura_report,
+            taura_trace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -291,6 +309,23 @@ mod tests {
             Ok(r) => println!("diff ok={} pdf={:?}", r.ok, r.pdf),
             Err(e) => println!("diff error: {e}"),
         }
+    }
+
+    /// `TUHI_TEST_TAURA_PAPER=~/overleaf/trust-align cargo test taura -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn taura_report_and_trace() {
+        let root = PathBuf::from(std::env::var("TUHI_TEST_TAURA_PAPER").expect("set TUHI_TEST_TAURA_PAPER"));
+        let report = taura::report(&root).unwrap().expect("paired");
+        println!("code {} · {} findings · {} changes", report.status["code"], report.findings.len(), report.changes.len());
+        for a in &report.artifacts {
+            println!("artifact {} {} {}", a.name, a.kind, a.output);
+        }
+        let trace = taura::trace(&root, "fig1/apex-minutes").unwrap();
+        let text = trace.to_string();
+        println!("trace {} bytes, has packages: {}", text.len(), text.contains("\"packages\""));
+        assert!(!text.contains("\"packages\""));
+        assert!(taura::report(&std::env::temp_dir()).unwrap().is_none());
     }
 
     #[test]

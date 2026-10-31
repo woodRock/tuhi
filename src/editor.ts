@@ -1,17 +1,20 @@
 import { basicSetup } from "codemirror";
-import { Decoration, DecorationSet, EditorView, keymap } from "@codemirror/view";
-import { Compartment, EditorState, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, DecorationSet, EditorView, GutterMarker, gutter, keymap } from "@codemirror/view";
+import { Compartment, EditorState, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { Diagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { oneDark } from "@codemirror/theme-one-dark";
+import type { Marker } from "./provenance";
 
 export interface EditorHooks {
   onSave(): void;
   onDirtyChange(): void;
   /** Cmd-click or Cmd-J: show this source position in the PDF. */
   onForwardSync(line: number, column: number): void;
+  /** A provenance dot in the gutter was clicked. */
+  onMarkerClick(marker: Marker, x: number, y: number): void;
 }
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -34,6 +37,42 @@ const flashField = StateField.define<DecorationSet>({
     return decorations;
   },
   provide: (field) => EditorView.decorations.from(field),
+});
+
+// Provenance dots in their own gutter, kept in place as the text is edited.
+class Dot extends GutterMarker {
+  constructor(readonly marker: Marker) {
+    super();
+  }
+  eq(other: Dot) {
+    return other.marker.level === this.marker.level && other.marker.notes.join() === this.marker.notes.join();
+  }
+  toDOM() {
+    const dot = document.createElement("span");
+    dot.className = `prov-dot prov-${this.marker.level}`;
+    dot.title = this.marker.notes.join("\n");
+    return dot;
+  }
+}
+
+const setMarkers = StateEffect.define<Marker[]>();
+const markerField = StateField.define<RangeSet<Dot>>({
+  create: () => RangeSet.empty,
+  update(markers, tr) {
+    markers = markers.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setMarkers)) continue;
+      const builder = new RangeSetBuilder<Dot>();
+      for (const m of effect.value) {
+        if (m.line >= 1 && m.line <= tr.state.doc.lines) {
+          const from = tr.state.doc.line(m.line).from;
+          builder.add(from, from, new Dot(m));
+        }
+      }
+      markers = builder.finish();
+    }
+    return markers;
+  },
 });
 
 /**
@@ -75,6 +114,23 @@ export class Editor {
         StreamLanguage.define(stex),
         EditorView.lineWrapping,
         lintGutter(),
+        markerField,
+        gutter({
+          class: "cm-provenance",
+          markers: (view) => view.state.field(markerField),
+          domEventHandlers: {
+            mousedown: (view, block, event) => {
+              let found: Dot | null = null;
+              view.state.field(markerField).between(block.from, block.from, (_from, _to, dot) => {
+                found = dot;
+              });
+              if (!found) return false;
+              const e = event as MouseEvent;
+              this.hooks.onMarkerClick((found as Dot).marker, e.clientX, e.clientY);
+              return true;
+            },
+          },
+        }),
         flashField,
         this.theme.of(themeFor(darkQuery.matches)),
         keymap.of([
@@ -202,6 +258,11 @@ export class Editor {
     this.view.focus();
     clearTimeout(this.flashTimer);
     this.flashTimer = window.setTimeout(() => this.view.dispatch({ effects: flashLine.of(null) }), 1200);
+  }
+
+  /** Shows provenance dots for the current file. */
+  setMarkers(markers: Marker[]) {
+    this.view.dispatch({ effects: setMarkers.of(markers) });
   }
 
   /** Shows compile problems for the current file in the gutter. */

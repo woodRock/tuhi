@@ -3,6 +3,8 @@ import * as api from "./api";
 import { Editor } from "./editor";
 import { Preview } from "./preview";
 import { ReviewPanel } from "./review";
+import { markersFor, renderTrace, type Marker } from "./provenance";
+import { ProvenancePanel } from "./provenance-panel";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -27,6 +29,8 @@ const ui = {
   tabReview: $("tab-review"),
   preview: $("preview"),
   review: $("review"),
+  tabProvenance: $("tab-provenance"),
+  provenance: $("provenance"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -35,11 +39,14 @@ let project: api.Project | null = null;
 let issues: api.Issue[] = [];
 let compiling = false;
 let compileQueued = false;
+/** taura's report for the open paper; null when it isn't paired with a code repo. */
+let taura: api.TauraReport | null = null;
 
 const editor = new Editor($("editor"), {
   onSave: () => void saveAndCompile(),
   onDirtyChange: () => (ui.dirty.hidden = editor.dirtyFiles().length === 0),
   onForwardSync: (line, column) => void forwardSync(line, column),
+  onMarkerClick: (marker, x, y) => void showProvenance(marker, x, y),
 });
 
 const preview = new Preview($("preview"), (page, x, y) => void inverseSync(page, x, y));
@@ -66,6 +73,11 @@ const reviewPanel = new ReviewPanel(ui.review, {
     ui.file.replaceChildren(...project.files.map((f) => new Option(f, f)));
     if (editor.file) ui.file.value = editor.file;
   },
+});
+
+const provenancePanel = new ProvenancePanel(ui.provenance, {
+  jump: (file, line) => void openFile(file, line).catch(report),
+  refresh: () => refreshProvenance(),
 });
 
 function setStatus(text: string, error = false) {
@@ -102,6 +114,8 @@ async function loadProject(path: string) {
   showIssues([], "");
 
   await reviewPanel.setProject(project.root, project.main);
+  taura = null;
+  void refreshProvenance();
 
   const first = project.main ?? project.files.find((f) => f.endsWith(".tex")) ?? project.files[0];
   if (first) await openFile(first);
@@ -115,6 +129,7 @@ async function openFile(file: string, line?: number, column?: number) {
   if (editor.file !== file) editor.show(file);
   ui.file.value = file;
   showProblemsInEditor();
+  updateMarkers();
   if (line) editor.goTo(line, column);
 }
 
@@ -156,6 +171,7 @@ async function runCompile() {
     if (project?.root !== root) return;
     if (result.pdf) await preview.load(await api.readPdf(root, main));
     showIssues(result.issues, result.log);
+    void refreshProvenance();
     const errors = result.issues.filter((i) => i.severity === "error").length;
     const seconds = (result.millis / 1000).toFixed(1);
     if (errors) setStatus(`${errors} error${errors > 1 ? "s" : ""} · ${seconds}s`, true);
@@ -194,6 +210,59 @@ async function inverseSync(page: number, x: number, y: number) {
     else setStatus("No source found for that spot");
   } catch (error) {
     report(error);
+  }
+}
+
+// Provenance (taura)
+
+let provenanceRun = 0;
+
+async function refreshProvenance() {
+  if (!project) return;
+  const root = project.root;
+  const run = ++provenanceRun;
+  if (!taura) provenancePanel.set(null, true);
+  const next = await api.tauraReport(root).catch(() => null);
+  if (run !== provenanceRun || project?.root !== root) return;
+  taura = next;
+  provenancePanel.set(taura, false);
+  updateMarkers();
+}
+
+function updateMarkers() {
+  if (!editor.file) return;
+  editor.setMarkers(taura && editor.file.endsWith(".tex") ? markersFor(editor.file, editor.text(editor.file), taura) : []);
+}
+
+const popover = document.createElement("div");
+popover.className = "popover";
+popover.hidden = true;
+document.body.append(popover);
+document.addEventListener("mousedown", (e) => {
+  if (!popover.hidden && !popover.contains(e.target as Node)) popover.hidden = true;
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") popover.hidden = true;
+});
+
+async function showProvenance(marker: Marker, x: number, y: number) {
+  if (!project) return;
+  const notes = document.createElement("ul");
+  notes.className = "popover-notes";
+  for (const note of marker.notes) {
+    const li = document.createElement("li");
+    li.textContent = note;
+    notes.append(li);
+  }
+  popover.replaceChildren(notes);
+  popover.style.left = `${Math.min(x + 12, window.innerWidth - 440)}px`;
+  popover.style.top = `${Math.min(y, window.innerHeight - 200)}px`;
+  popover.hidden = false;
+  const root = project.root;
+  for (const target of marker.targets.slice(0, 4)) {
+    const trace = await api.tauraTrace(root, target).catch((e) => ({ items: [{ kind: "error", key: String(e) }] }));
+    if (popover.hidden) return;
+    popover.append(renderTrace(trace));
   }
 }
 
@@ -258,17 +327,22 @@ function selectTab(log: boolean) {
   ui.problems.classList.remove("collapsed");
 }
 
-function showSide(review: boolean) {
-  ui.tabPdf.classList.toggle("active", !review);
-  ui.tabReview.classList.toggle("active", review);
-  ui.preview.hidden = review;
-  ui.review.hidden = !review;
+type Side = "pdf" | "review" | "provenance";
+
+function showSide(side: Side) {
+  ui.tabPdf.classList.toggle("active", side === "pdf");
+  ui.tabReview.classList.toggle("active", side === "review");
+  ui.tabProvenance.classList.toggle("active", side === "provenance");
+  ui.preview.hidden = side !== "pdf";
+  ui.review.hidden = side !== "review";
+  ui.provenance.hidden = side !== "provenance";
 }
 
 // Wiring
 
-ui.tabPdf.addEventListener("click", () => showSide(false));
-ui.tabReview.addEventListener("click", () => showSide(true));
+ui.tabPdf.addEventListener("click", () => showSide("pdf"));
+ui.tabReview.addEventListener("click", () => showSide("review"));
+ui.tabProvenance.addEventListener("click", () => showSide("provenance"));
 ui.open.addEventListener("click", () => void chooseProject().catch(report));
 ui.compile.addEventListener("click", () => void saveAndCompile());
 ui.file.addEventListener("change", () => void openFile(ui.file.value).catch(report));

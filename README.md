@@ -55,6 +55,23 @@ The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
 Reviews are saved in the paper's repo under `.tuhi/reviews/`, alongside a copy of each
 annotated PDF.
 
+### Provenance (taura)
+
+For papers paired with a code repo in taura, a dot in the editor's left gutter marks every
+`\res{}` number, figure and table:
+
+- **green**: traces to a ledger entry
+- **amber**: the result or artifact changed in the code repo since it was published, so
+  `taura publish` would change it
+- **red**: no provenance: an undefined `\res` key, a figure taura didn't generate, or a table
+  typed by hand
+- **amber ring**: taura flags the line, e.g. a typed number that matches a recorded result
+
+Click a dot for where it came from: the ledger result, the script and commit that produced it,
+the data, and when it was published (`taura trace`). The **Provenance** tab lists `taura check`
+findings and what `taura publish` would change. tuhi only reads: it runs taura's CLI with
+`--json` after each compile and never writes to the ledger.
+
 Build output goes to the app's cache folder, never into the paper's repo. Uses `latexmk` when
 installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelatex` picks the engine.
 

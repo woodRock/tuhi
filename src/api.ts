@@ -133,3 +133,42 @@ export const gitRevisions = (root: string) => invoke<Revision[]>("git_revisions"
 export const makeDiff = (root: string, main: string, rev: string) => invoke<CompileResult>("make_diff", { root, main, rev });
 
 export const openPath = (path: string) => invoke<void>("open_path", { path });
+
+export interface TauraFinding {
+  id: string;
+  severity: "error" | "warn";
+  repo: "paper" | "code";
+  /** "file.tex:LINE" for paper findings; an artifact or ledger path for code findings. */
+  location: string;
+  message: string;
+  fix: string;
+}
+
+export interface TauraChange {
+  artifact: string;
+  change: string;
+  /** e.g. "\res{mba/f1/mean}" or "row MBA col F1". */
+  what: string;
+  old: string | null;
+  new: string | null;
+  text: string;
+}
+
+export interface TauraArtifact {
+  name: string;
+  kind: string;
+  output: string;
+}
+
+export interface TauraReport {
+  status: { code?: string; last_publish?: string; published_commit?: string; [k: string]: unknown };
+  findings: TauraFinding[];
+  changes: TauraChange[];
+  artifacts: TauraArtifact[];
+}
+
+/** null when taura isn't installed or the paper has no paired code repo. */
+export const tauraReport = (root: string) => invoke<TauraReport | null>("taura_report", { root });
+
+/** `taura trace` for a \res key, an artifact name or file.tex:LINE. */
+export const tauraTrace = (root: string, target: string) => invoke<Record<string, any>>("taura_trace", { root, target });
