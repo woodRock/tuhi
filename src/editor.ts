@@ -145,6 +145,13 @@ export class Editor {
     return state?.doc.toString() ?? "";
   }
 
+  /** The current file and 1-based cursor line. */
+  cursor(): { file: string; line: number } | null {
+    if (!this.file) return null;
+    const state = this.view.state;
+    return { file: this.file, line: state.doc.lineAt(state.selection.main.head).number };
+  }
+
   dirtyFiles(): string[] {
     return [...this.dirty];
   }

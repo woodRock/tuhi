@@ -54,3 +54,41 @@ export const synctexForward = (root: string, main: string, file: string, line: n
 
 export const synctexInverse = (root: string, main: string, page: number, x: number, y: number) =>
   invoke<SourceLocation | null>("synctex_inverse", { root, main, page, x, y });
+
+export interface PastedComment {
+  group: string | null;
+  text: string;
+  quote: string | null;
+}
+
+export interface Located {
+  file: string;
+  line: number;
+  /**
+   * "text" when the quote was found in the source, "position" when only SyncTeX placed it,
+   * "manual" when placed by hand.
+   */
+  method: "text" | "position" | "manual";
+  score: number;
+}
+
+export interface LocateQuery {
+  quote?: string | null;
+  page?: number;
+  x?: number;
+  y?: number;
+}
+
+export const listReviews = <T>(root: string) => invoke<T[]>("list_reviews", { root });
+
+export const saveReview = (root: string, review: unknown) => invoke<void>("save_review", { root, review });
+
+export const importReviewPdf = (root: string, id: string, source: string) =>
+  invoke<string>("import_review_pdf", { root, id, source });
+
+export const readBytes = (root: string, file: string) => invoke<ArrayBuffer>("read_bytes", { root, file });
+
+export const splitComments = (letter: string) => invoke<PastedComment[]>("split_comments", { letter });
+
+export const locateComments = (root: string, main: string, queries: LocateQuery[]) =>
+  invoke<(Located | null)[]>("locate_comments", { root, main, queries });

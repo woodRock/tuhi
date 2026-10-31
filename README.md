@@ -19,6 +19,22 @@ npm run tauri dev
   **⌘J** shows the cursor's line in the PDF.
 - Problems from the TeX log and BibTeX appear under the editor and in the gutter; click one to jump.
 
+### Reviewer comments
+
+The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
+
+- **Import PDF…** reads a reviewer's annotated PDF: highlights, strikeouts, sticky notes and
+  their replies. Each becomes a card in the next reviewer group (R1, R2, …).
+- **Paste comments…** splits a review letter into cards by numbered items, bullets or
+  paragraphs; headings such as "Reviewer 2" set the group.
+- Each card is linked to a source line by matching the quoted text against the `.tex` files,
+  falling back to SyncTeX on the page position. "≈" marks a guess; **Move here** or
+  **Place at cursor** re-links a card to the editor's line. Click a card to jump to it.
+- Statuses are Open, Proposed, Accepted and Won't fix (with a reason for the response letter).
+
+Reviews are saved in the paper's repo under `.tuhi/reviews/`, alongside a copy of each
+annotated PDF.
+
 Build output goes to the app's cache folder, never into the paper's repo. Uses `latexmk` when
 installed, otherwise runs the engine and BibTeX itself. `% !TEX program = xelatex` picks the engine.
 

@@ -61,6 +61,8 @@ export class Preview {
     if (!doc) return;
     const generation = ++this.generation;
     const width = this.container.clientWidth;
+    // Hidden (e.g. behind the Review tab): render when it's shown again.
+    if (width < 50) return;
     this.targetWidth = width;
     const fitWidth = width - SIDE_PADDING * 2;
     const dpr = window.devicePixelRatio || 1;

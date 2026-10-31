@@ -162,10 +162,31 @@ button.primary {
   background: var(--border);
 }
 
+.side {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.side-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
 .preview {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   background: var(--pdf-bg);
-  min-width: 0;
+}
+
+.preview[hidden],
+.review[hidden] {
+  display: none;
 }
 
 .pdf-pages {
@@ -295,4 +316,191 @@ button.primary {
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-size: 11px;
   white-space: pre-wrap;
+}
+
+/* Review tab */
+
+.review {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.review-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 4px;
+}
+
+.filters {
+  display: flex;
+  gap: 2px;
+}
+
+.chip {
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.chip.active {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.review-counts {
+  padding: 0 10px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.paste-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.paste-box[hidden] {
+  display: none;
+}
+
+.paste-box textarea {
+  height: 180px;
+  resize: vertical;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.paste-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cards {
+  flex: 1;
+  overflow: auto;
+  padding: 0 10px 16px;
+}
+
+.review-empty {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 40px;
+}
+
+.group-heading {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 12px 0 6px;
+  font-weight: 600;
+}
+
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  cursor: default;
+}
+
+.card.status-open {
+  border-left-color: var(--warning);
+}
+
+.card.status-proposed {
+  border-left-color: #5b8def;
+}
+
+.card.status-accepted {
+  border-left-color: var(--accent);
+}
+
+.card.status-wontfix {
+  border-left-color: var(--muted);
+  opacity: 0.8;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-id {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-meta {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-where,
+.card-place {
+  white-space: nowrap;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-where {
+  color: var(--accent);
+}
+
+.card-where.approx::before {
+  content: "≈ ";
+}
+
+.card-place {
+  color: var(--muted);
+}
+
+.card-status {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+.card-quote {
+  margin: 8px 0 0;
+  padding: 2px 0 2px 8px;
+  border-left: 2px solid var(--sync);
+  color: var(--muted);
+  font-style: italic;
+}
+
+.card-comment {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
+.card-reason {
+  width: 100%;
+  margin-top: 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
 }

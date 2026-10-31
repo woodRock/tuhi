@@ -1,5 +1,6 @@
 mod compile;
 mod project;
+mod review;
 mod synctex;
 mod tools;
 
@@ -81,6 +82,67 @@ async fn synctex_inverse(
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn list_reviews(root: String) -> Result<Vec<serde_json::Value>, String> {
+    review::list(Path::new(&root))
+}
+
+#[tauri::command]
+fn save_review(root: String, review: serde_json::Value) -> Result<(), String> {
+    review::save(Path::new(&root), &review)
+}
+
+#[tauri::command]
+fn import_review_pdf(root: String, id: String, source: String) -> Result<String, String> {
+    review::import_pdf(Path::new(&root), &id, Path::new(&source))
+}
+
+/// Any file inside the project as raw bytes, e.g. a reviewer's annotated PDF.
+#[tauri::command]
+fn read_bytes(root: String, file: String) -> Result<tauri::ipc::Response, String> {
+    let path = project::resolve(Path::new(&root), &file)?;
+    fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| format!("{file}: {e}"))
+}
+
+#[tauri::command]
+fn split_comments(letter: String) -> Vec<review::PastedComment> {
+    review::split_comments(&letter)
+}
+
+#[derive(serde::Deserialize)]
+struct LocateQuery {
+    quote: Option<String>,
+    page: Option<u32>,
+    x: Option<f64>,
+    y: Option<f64>,
+}
+
+#[tauri::command]
+async fn locate_comments(
+    app: AppHandle,
+    root: String,
+    main: String,
+    queries: Vec<LocateQuery>,
+) -> Result<Vec<Option<review::Located>>, String> {
+    let pdf = pdf_for(&app, &root, &main)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(root);
+        let files = project::open(&root)?.files;
+        Ok(queries
+            .iter()
+            .map(|q| {
+                let position = match (q.page, q.x, q.y) {
+                    (Some(page), Some(x), Some(y)) => Some((page, x, y)),
+                    _ => None,
+                };
+                review::locate(&root, &files, &pdf, q.quote.as_deref(), position)
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -93,6 +155,12 @@ pub fn run() {
             read_pdf,
             synctex_forward,
             synctex_inverse,
+            list_reviews,
+            save_review,
+            import_review_pdf,
+            read_bytes,
+            split_comments,
+            locate_comments,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -127,6 +195,14 @@ mod tests {
             .expect("a source location");
         println!("inverse -> {}:{}", back.file, back.line);
         assert_eq!(back.file, main);
+
+        // A sentence as PDF text extraction would give it, hyphenation and ligatures included.
+        let quote = "By construction, the induced batch-to-batch transformations are cycle-consistent: mapping from batch A to batch B";
+        let found = review::locate(&root, &project.files, &pdf, Some(quote), None).expect("located");
+        println!("quote -> {}:{} {} {:.2}", found.file, found.line, found.method, found.score);
+        assert_eq!(found.method, "text");
+        let by_position = review::locate(&root, &project.files, &pdf, None, Some((first.page, first.x + 5.0, first.y + 5.0)));
+        println!("position -> {:?}", by_position);
     }
 
     #[test]

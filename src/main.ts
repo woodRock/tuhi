@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import { Editor } from "./editor";
 import { Preview } from "./preview";
+import { ReviewPanel } from "./review";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -22,6 +23,10 @@ const ui = {
   tabLog: $("tab-log"),
   problemsToggle: $("problems-toggle"),
   divider: $("divider"),
+  tabPdf: $("tab-pdf"),
+  tabReview: $("tab-review"),
+  preview: $("preview"),
+  review: $("review"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -38,6 +43,12 @@ const editor = new Editor($("editor"), {
 });
 
 const preview = new Preview($("preview"), (page, x, y) => void inverseSync(page, x, y));
+
+const reviewPanel = new ReviewPanel(ui.review, {
+  jump: (file, line) => void openFile(file, line).catch(report),
+  cursor: () => editor.cursor(),
+  status: (text, error) => setStatus(text, error),
+});
 
 function setStatus(text: string, error = false) {
   ui.status.textContent = text;
@@ -71,6 +82,8 @@ async function loadProject(path: string) {
   editor.reset();
   preview.clear();
   showIssues([], "");
+
+  await reviewPanel.setProject(project.root, project.main);
 
   const first = project.main ?? project.files.find((f) => f.endsWith(".tex")) ?? project.files[0];
   if (first) await openFile(first);
@@ -223,8 +236,17 @@ function selectTab(log: boolean) {
   ui.problems.classList.remove("collapsed");
 }
 
+function showSide(review: boolean) {
+  ui.tabPdf.classList.toggle("active", !review);
+  ui.tabReview.classList.toggle("active", review);
+  ui.preview.hidden = review;
+  ui.review.hidden = !review;
+}
+
 // Wiring
 
+ui.tabPdf.addEventListener("click", () => showSide(false));
+ui.tabReview.addEventListener("click", () => showSide(true));
 ui.open.addEventListener("click", () => void chooseProject().catch(report));
 ui.compile.addEventListener("click", () => void saveAndCompile());
 ui.file.addEventListener("change", () => void openFile(ui.file.value).catch(report));
