@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tuhi</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <header class="toolbar">
+      <button id="open" title="Open a paper folder (⌘O)">Open…</button>
+      <span id="project-name" class="project-name"></span>
+      <select id="file" title="File" disabled></select>
+      <span id="dirty" class="dirty" hidden title="Unsaved changes">●</span>
+      <span class="spacer"></span>
+      <span id="status" class="status"></span>
+      <button id="compile" class="primary" title="Save and compile (⌘S)" disabled>Compile</button>
+    </header>
+
+    <main class="workspace" id="workspace">
+      <section class="source">
+        <div id="editor" class="editor">
+          <div class="empty" id="empty">
+            <p>Open a paper folder to start.</p>
+            <p class="hint">⌘S save and compile · ⌘-click source or PDF to jump · ⌘J show cursor in PDF</p>
+          </div>
+        </div>
+        <div class="problems" id="problems">
+          <div class="problems-tabs">
+            <button id="tab-problems" class="tab active">Problems <span id="problem-count"></span></button>
+            <button id="tab-log" class="tab">Log</button>
+            <span class="spacer"></span>
+            <button id="problems-toggle" class="tab" title="Show or hide">▾</button>
+          </div>
+          <ul id="problem-list" class="problem-list"></ul>
+          <pre id="log" class="log" hidden></pre>
+        </div>
+      </section>
+      <div class="divider" id="divider"></div>
+      <section class="preview" id="preview"></section>
+    </main>
+  </body>
+</html>

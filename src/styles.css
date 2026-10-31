@@ -1,0 +1,298 @@
+:root {
+  --bg: #ffffff;
+  --panel: #f5f5f4;
+  --border: #e2e2df;
+  --text: #1c1c1a;
+  --muted: #74746f;
+  --accent: #2f6f5e;
+  --accent-text: #ffffff;
+  --error: #c2402d;
+  --warning: #a86a00;
+  --pdf-bg: #d9d9d6;
+  --sync: rgba(255, 196, 0, 0.45);
+  --flash: rgba(255, 196, 0, 0.25);
+
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #282c34;
+    --panel: #21252b;
+    --border: #181a1f;
+    --text: #d7dae0;
+    --muted: #8b919c;
+    --accent: #4f9d87;
+    --error: #e06c5a;
+    --warning: #e5b05c;
+    --pdf-bg: #1b1d22;
+    --sync: rgba(255, 196, 0, 0.4);
+    --flash: rgba(255, 196, 0, 0.18);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+button,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Toolbar */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.project-name {
+  font-weight: 600;
+}
+
+.dirty {
+  color: var(--accent);
+}
+
+.status {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.status.error {
+  color: var(--error);
+}
+
+/* Split view */
+
+.workspace {
+  --source-width: 50%;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--source-width) 5px 1fr;
+}
+
+.source {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.editor .cm-editor {
+  height: 100%;
+}
+
+.editor .cm-scroller {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.cm-flash {
+  background: var(--flash);
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: var(--bg);
+  z-index: 1;
+}
+
+.empty .hint {
+  font-size: 12px;
+}
+
+.divider {
+  cursor: col-resize;
+  background: var(--border);
+}
+
+.preview {
+  overflow: auto;
+  background: var(--pdf-bg);
+  min-width: 0;
+}
+
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0;
+}
+
+.pdf-page {
+  position: relative;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.pdf-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sync-mark {
+  position: absolute;
+  background: var(--sync);
+  border-radius: 3px;
+  pointer-events: none;
+  animation: sync-fade 2.4s ease-in forwards;
+}
+
+@keyframes sync-fade {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Problems panel */
+
+.problems {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.problems.collapsed {
+  height: auto;
+}
+
+.problems.collapsed .problem-list,
+.problems.collapsed .log {
+  display: none;
+}
+
+.problems-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px 6px;
+}
+
+.tab {
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 2px 8px;
+}
+
+.tab.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.problem-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+}
+
+.problem-list li {
+  display: flex;
+  gap: 8px;
+  padding: 3px 10px;
+  cursor: default;
+}
+
+.problem-list li.linked {
+  cursor: pointer;
+}
+
+.problem-list li.linked:hover {
+  background: var(--bg);
+}
+
+.problem-list .where {
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.problem-list .error .sev {
+  color: var(--error);
+}
+
+.problem-list .warning .sev {
+  color: var(--warning);
+}
+
+.problem-list .info .sev {
+  color: var(--muted);
+}
+
+.problem-list .none {
+  color: var(--muted);
+}
+
+.log {
+  margin: 0;
+  padding: 6px 10px;
+  overflow: auto;
+  flex: 1;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
