@@ -3,11 +3,13 @@ import { Decoration, DecorationSet, EditorView, GutterMarker, gutter, hoverToolt
 import { Compartment, EditorSelection, EditorState, Extension, Transaction, TransactionSpec, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
 import { indentWithTab } from "@codemirror/commands";
+import { openSearchPanel } from "@codemirror/search";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { Diagnostic, forceLinting, lintGutter, linter } from "@codemirror/lint";
 import { oneDark } from "@codemirror/theme-one-dark";
 import type { Citations } from "./citations";
-import { acceptSpec, marksExtension, marksField, setMarks, setSuggesting, suggestingField, type Mark } from "./marks";
+import { rebase } from "./diff";
+import { acceptSpec, direct, marksExtension, marksField, setMarks, setSuggesting, suggestingField, type Mark } from "./marks";
 import type { Marker } from "./provenance";
 
 export interface EditorHooks {
@@ -215,6 +217,22 @@ export class Editor {
     if (this.file) forceLinting(this.view);
   }
 
+  /** Shows the cursor's line in the PDF (⌘J). */
+  syncCursor() {
+    if (this.file) this.syncAt(this.view.state.selection.main.head);
+  }
+
+  focus() {
+    this.view.focus();
+  }
+
+  /** Opens CodeMirror's search panel. */
+  find() {
+    if (!this.file) return;
+    this.view.focus();
+    openSearchPanel(this.view);
+  }
+
   private syncAt(pos: number) {
     const line = this.view.state.doc.lineAt(pos);
     this.hooks.onForwardSync(line.number, pos - line.from + 1);
@@ -286,8 +304,13 @@ export class Editor {
       const distance = Math.abs(state.doc.lineAt(i).number - nearLine);
       if (distance < bestDistance) [best, bestDistance] = [i, distance];
     }
-    if (best < 0) return null;
-    const changes = { from: best, to: best + before.length, insert: after };
+    let changes = { from: best, to: best + before.length, insert: after };
+    if (best < 0) {
+      const near = state.doc.line(Math.min(Math.max(1, nearLine), state.doc.lines)).from;
+      const rebased = rebase(text, before, after, near);
+      if (!rebased) return null;
+      [best, changes] = [rebased.from, rebased];
+    }
     if (file === this.file) {
       this.view.dispatch({ changes });
     } else {
@@ -299,6 +322,34 @@ export class Editor {
       if (wasDirty !== this.dirty.has(file)) this.hooks.onDirtyChange();
     }
     return state.doc.lineAt(best).number;
+  }
+
+  /**
+   * Takes a file's new text from disk, changing only the part that differs so the cursor,
+   * scroll position and suggestions stay put. It isn't a suggestion and can't be undone.
+   */
+  reloadText(file: string, text: string) {
+    const state = file === this.file ? this.view.state : this.states.get(file);
+    if (!state) return;
+    const old = state.doc.toString();
+    let start = 0;
+    while (start < old.length && start < text.length && old[start] === text[start]) start++;
+    let end = 0;
+    while (end < old.length - start && end < text.length - start && old[old.length - 1 - end] === text[text.length - 1 - end]) end++;
+    const spec: TransactionSpec = {
+      changes: { from: start, to: old.length - end, insert: text.slice(start, text.length - end) },
+      annotations: [direct.of(true), Transaction.addToHistory.of(false), Transaction.userEvent.of("reload")],
+    };
+    // Record it as saved first, so the update listener sees a clean file.
+    this.saved.set(file, text);
+    if (file === this.file) this.view.dispatch(spec);
+    else this.states.set(file, state.update(spec).state);
+    this.dirty.delete(file);
+  }
+
+  /** The text last read from or written to disk. */
+  savedText(file: string): string | undefined {
+    return this.saved.get(file);
   }
 
   dirtyFiles(): string[] {

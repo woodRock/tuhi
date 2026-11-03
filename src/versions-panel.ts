@@ -29,6 +29,7 @@ export class VersionsPanel {
   private from = el("select");
   private to = el("select");
   private result = el("div", "versions-result");
+  private name = el("input", "versions-name");
   private body = el("div", "cards");
 
   constructor(
@@ -36,7 +37,7 @@ export class VersionsPanel {
     private hooks: VersionsHooks,
   ) {
     const bar = el("div", "review-bar");
-    const name = el("input", "versions-name");
+    const name = this.name;
     name.placeholder = "Name, e.g. Submitted v1";
     const take = el("button", "primary", "Take snapshot");
     take.title = "Record every file as it is now under this name (a git tag; your branch and history don't change)";
@@ -78,6 +79,15 @@ export class VersionsPanel {
     compare.append(el("span", "card-meta", "Compare"), this.from, el("span", "card-meta", "with"), this.to, changes, pdf);
     this.body.append(el("h3", "group-heading", "Snapshots"), this.list, el("h3", "group-heading", "Compare versions"), compare, this.result);
     container.append(bar, this.body);
+  }
+
+  focusName() {
+    this.name.focus();
+  }
+
+  focusCompare() {
+    this.from.scrollIntoView({ block: "center" });
+    this.from.focus();
   }
 
   async setProject(root: string | null) {

@@ -58,9 +58,14 @@ export interface ReviewHooks {
 interface Problem {
   card?: Card;
   text: string;
+  /** Worth knowing but not something to resolve. */
+  note?: boolean;
 }
 
-const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
+/** JSON with sorted keys, so the same data compares equal however it was written. */
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
+
 
 const STATUS_LABELS: Record<Status, string> = {
   open: "Open",
@@ -144,22 +149,9 @@ export class ReviewPanel {
     this.finish.append(checkButton, letterButton, diffButton, el("span", "finish-label", "against"), this.baseSelect);
     this.problems.hidden = true;
 
-    const run = (task: () => Promise<void>) => async () => {
-      if (this.busy) return;
-      this.busy = true;
-      this.finish.classList.add("busy");
-      try {
-        await task();
-      } catch (error) {
-        this.hooks.status(String(error), true);
-      } finally {
-        this.busy = false;
-        this.finish.classList.remove("busy");
-      }
-    };
-    checkButton.addEventListener("click", run(() => this.check().then(() => undefined)));
-    letterButton.addEventListener("click", run(() => this.writeLetter()));
-    diffButton.addEventListener("click", run(() => this.makeDiff()));
+    checkButton.addEventListener("click", () => void this.finishing("check"));
+    letterButton.addEventListener("click", () => void this.finishing("letter"));
+    diffButton.addEventListener("click", () => void this.finishing("diff"));
 
     container.append(bar, this.counts, this.finish, this.problems, this.pasteBox, this.list);
 
@@ -168,21 +160,42 @@ export class ReviewPanel {
       this.render();
     });
     importButton.addEventListener("click", () => void this.importPdf().catch((e) => this.hooks.status(String(e), true)));
-    pasteButton.addEventListener("click", () => {
-      this.pasteBox.hidden = false;
-      this.pasteText.focus();
-    });
+    pasteButton.addEventListener("click", () => this.showPaste());
     cancel.addEventListener("click", () => (this.pasteBox.hidden = true));
     add.addEventListener("click", () => void this.addPasted().catch((e) => this.hooks.status(String(e), true)));
     draftAllButton.addEventListener("click", () => void this.draftAll());
-    newButton.addEventListener("click", () => {
-      if (!this.root) return;
-      this.review = this.newRound();
-      this.reviews.push(this.review);
-      this.save();
-      this.render();
-    });
+    newButton.addEventListener("click", () => this.startRound());
     this.render();
+  }
+
+  showPaste() {
+    this.pasteBox.hidden = false;
+    this.pasteText.focus();
+  }
+
+  startRound() {
+    if (!this.root) return;
+    this.review = this.newRound();
+    this.reviews.push(this.review);
+    this.save();
+    this.render();
+  }
+
+  /** Check, Response letter or Diff PDF; one at a time. */
+  async finishing(task: "check" | "letter" | "diff") {
+    if (this.busy) return;
+    this.busy = true;
+    this.finish.classList.add("busy");
+    try {
+      if (task === "check") await this.check();
+      else if (task === "letter") await this.writeLetter();
+      else await this.makeDiff();
+    } catch (error) {
+      this.hooks.status(String(error), true);
+    } finally {
+      this.busy = false;
+      this.finish.classList.remove("busy");
+    }
   }
 
   async setProject(root: string, main: string | null) {
@@ -193,6 +206,22 @@ export class ReviewPanel {
     this.problems.hidden = true;
     this.revisions = await api.gitRevisions(root).catch(() => []);
     this.render();
+  }
+
+  /**
+   * Re-reads the reviews after they changed on disk. Skipped while a draft or save is in
+   * flight, since those hold on to the cards being replaced. Returns whether anything changed.
+   */
+  async reload(): Promise<boolean> {
+    const root = this.root;
+    if (!root || this.saveTimer || this.drafting.size || this.busy) return false;
+    const reviews = await api.listReviews<Review>(root);
+    if (root !== this.root || this.saveTimer || this.drafting.size || canonical(reviews) === canonical(this.reviews)) return false;
+    const id = this.review?.id;
+    this.reviews = reviews;
+    this.review = reviews.find((r) => r.id === id) ?? reviews.at(-1) ?? null;
+    this.render();
+    return true;
   }
 
   private newReview(): Review {
@@ -230,7 +259,7 @@ export class ReviewPanel {
     }
   }
 
-  private async importPdf() {
+  async importPdf() {
     if (!this.root) return;
     const source = await open({ title: "Import a reviewer's annotated PDF", filters: [{ name: "PDF", extensions: ["pdf"] }] });
     if (typeof source !== "string") return;
@@ -308,8 +337,13 @@ export class ReviewPanel {
     this.drafting.add(card);
     this.render();
     try {
-      const { proposal: _old, response: _reply, ...context } = card;
-      card.proposal = await api.draftChange(root, context);
+      // Claude reads the files on disk, so accepted edits must be saved first.
+      await this.hooks.saveAll();
+      const { proposal: old, response: _reply, ...context } = card;
+      const applied = old?.hunks.filter((h) => h.state === "accepted") ?? [];
+      const proposal = await api.draftChange(root, { ...context, applied: applied.map(({ file, line, before, after }) => ({ file, line, before, after })) });
+      // Accepted edits are already in the text; keep them so they can still be undone.
+      card.proposal = { ...proposal, hunks: [...applied, ...proposal.hunks] };
       card.response = card.proposal.response;
       if (card.status === "open") card.status = "proposed";
       this.hooks.status(`Drafted ${card.id} ($${card.proposal.cost_usd.toFixed(2)})`);
@@ -323,7 +357,7 @@ export class ReviewPanel {
   }
 
   /** Drafts every open card without a proposal, two Claude sessions at a time. */
-  private async draftAll() {
+  async draftAll() {
     const queue = this.review?.cards.filter((c) => c.status === "open" && !c.proposal) ?? [];
     if (!queue.length) {
       this.hooks.status("No open comments need a draft");
@@ -383,15 +417,28 @@ export class ReviewPanel {
       else if (card.status === "proposed") problems.push({ card, text: "has a draft waiting for review" });
       else if (card.status === "wontfix" && !card.reason?.trim()) problems.push({ card, text: "won't fix, but no reason given" });
       else if (card.status === "accepted") {
-        if (!accepted.length) problems.push({ card, text: "accepted without an accepted edit; fine if you changed it by hand" });
+        if (!accepted.length) problems.push({ card, text: "accepted with no edit from tuhi; fine if you changed it by hand", note: true });
         if (!(card.response ?? card.proposal?.response ?? "").trim()) problems.push({ card, text: "no reply to the reviewer" });
       }
-      for (const hunk of accepted) {
-        const source = collapse(await this.hooks.sourceText(hunk.file).catch(() => ""));
-        if (!source.includes(collapse(hunk.after))) {
-          problems.push({ card, text: `the accepted edit at ${hunk.file}:${hunk.line} is no longer in the source` });
-        }
-      }
+    }
+    // Accepted edits that are gone from the text, matched as the response letter matches them:
+    // ones reworded since, or rewritten again by a later edit, still count as there.
+    const files = new Set(review.cards.flatMap((c) => c.proposal?.hunks.filter((h) => h.state === "accepted").map((h) => h.file) ?? []));
+    const sources: Record<string, string> = {};
+    for (const file of files) {
+      const text = await this.hooks.sourceText(file).catch(() => null);
+      if (text !== null) sources[file] = text;
+    }
+    for (const p of await api.reviewEditProblems(this.root, review, sources)) {
+      const card = review.cards.find((c) => c.id === p.card);
+      const at = `${p.file}${p.line ? `:${p.line}` : ""}`;
+      const shown = (t: string) => `“${t.length > 90 ? `${t.slice(0, 90)}…` : t}”`;
+      problems.push({
+        card,
+        text: p.gone
+          ? `the accepted edit near ${at} is no longer in the text: ${shown(p.missing[0] ?? "")}`
+          : `${p.missing.length} sentence(s) of the accepted edit near ${at} are no longer in the text: ${p.missing.map(shown).join(" ")}`,
+      });
     }
     // Re-read each reviewer PDF so no annotation goes without a card.
     for (const pdf of new Set(review.cards.map((c) => c.pdf).filter((p): p is string => !!p))) {
@@ -406,15 +453,13 @@ export class ReviewPanel {
   private showProblems(problems: Problem[]) {
     this.problems.hidden = false;
     const total = this.review?.cards.length ?? 0;
-    if (!problems.length) {
-      this.problems.className = "check-results ok";
-      this.problems.replaceChildren(el("p", "", `All ${total} comments are resolved.`));
-      return;
-    }
-    this.problems.className = "check-results";
+    const notes = problems.filter((p) => p.note).length;
+    const resolve = problems.length - notes;
+    this.problems.className = resolve ? "check-results" : "check-results ok";
     const list = el("ul");
-    for (const p of problems) {
-      const item = el("li");
+    // Things to resolve first, then the notes.
+    for (const p of [...problems.filter((p) => !p.note), ...problems.filter((p) => p.note)]) {
+      const item = el("li", p.note ? "check-note" : "");
       if (p.card) {
         const id = el("button", "card-where", p.card.id);
         id.addEventListener("click", () => {
@@ -430,7 +475,8 @@ export class ReviewPanel {
     }
     const close = el("button", "check-close", "×");
     close.addEventListener("click", () => (this.problems.hidden = true));
-    this.problems.replaceChildren(el("p", "", `${problems.length} to resolve`), close, list);
+    const heading = resolve ? `${resolve} to resolve` : `All ${total} comments are resolved.`;
+    this.problems.replaceChildren(el("p", "", notes ? `${heading} (${notes} note${notes === 1 ? "" : "s"})` : heading), close, list);
   }
 
   private async writeLetter() {
@@ -444,7 +490,8 @@ export class ReviewPanel {
     const result = await api.compile(this.root, rel);
     if (!result.pdf) throw new Error(`${rel} didn't compile; open it to fix`);
     await api.openPath(result.pdf);
-    this.hooks.status(problems.length ? `Wrote ${rel}; ${problems.length} thing(s) still to resolve, listed above` : `Wrote ${rel}`);
+    const open = problems.filter((p) => !p.note).length;
+    this.hooks.status(open ? `Wrote ${rel}; ${open} thing(s) still to resolve, listed above` : `Wrote ${rel}`);
   }
 
   private async makeDiff() {
@@ -468,9 +515,15 @@ export class ReviewPanel {
     const review = this.review;
     if (!root || !review) return;
     clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => {
-      api.saveReview(root, review).catch((e) => this.hooks.status(`Couldn't save review: ${e}`, true));
+    const timer = window.setTimeout(() => {
+      api
+        .saveReview(root, review)
+        .catch((e) => this.hooks.status(`Couldn't save review: ${e}`, true))
+        .finally(() => {
+          if (this.saveTimer === timer) this.saveTimer = 0;
+        });
     }, 300);
+    this.saveTimer = timer;
   }
 
   private render() {
@@ -663,8 +716,8 @@ export class ReviewPanel {
     const foot = el("div", "proposal-foot");
     foot.append(el("span", "proposal-cost", `Drafted by Claude · $${proposal.cost_usd.toFixed(2)}`), el("span", "spacer"));
     const redraft = el("button", "", this.drafting.has(card) ? "Drafting…" : "Redraft");
-    redraft.disabled = this.drafting.has(card) || proposal.hunks.some((h) => h.state === "accepted");
-    redraft.title = redraft.disabled ? "Undo accepted edits before redrafting" : "Ask Claude again";
+    redraft.disabled = this.drafting.has(card);
+    redraft.title = "Ask Claude again; edits you accepted stay";
     redraft.addEventListener("click", () => void this.draft(card));
     foot.append(redraft);
     box.append(foot);

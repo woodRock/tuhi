@@ -1,4 +1,6 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import "./polyfills";
+import { listen } from "@tauri-apps/api/event";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import { checklist, DEFAULT_SETTINGS, lint, type Finding, type Settings } from "./checks";
 import { ChecksPanel } from "./checks-panel";
@@ -19,14 +21,27 @@ import { ProvenancePanel } from "./provenance-panel";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const ui = {
-  open: $<HTMLButtonElement>("open"),
   projectName: $("project-name"),
-  file: $<HTMLSelectElement>("file"),
+  fileName: $("file-name"),
   dirty: $("dirty"),
   status: $("status"),
   compile: $<HTMLButtonElement>("compile"),
+  modeEdit: $<HTMLButtonElement>("mode-edit"),
+  modeSuggest: $<HTMLButtonElement>("mode-suggest"),
+  sidebarToggle: $<HTMLButtonElement>("sidebar-toggle"),
+  sidebar: $("sidebar"),
+  sidebarResize: $("sidebar-resize"),
+  fileFilter: $<HTMLInputElement>("file-filter"),
+  fileTree: $<HTMLUListElement>("file-tree"),
+  sectionsSection: $("sections-section"),
+  sectionList: $<HTMLUListElement>("section-list"),
   workspace: $("workspace"),
   empty: $("empty"),
+  welcomeOpen: $<HTMLButtonElement>("welcome-open"),
+  welcomeRecent: $("welcome-recent"),
+  recentList: $<HTMLUListElement>("recent-list"),
+  shortcuts: $("shortcuts"),
+  shortcutsClose: $<HTMLButtonElement>("shortcuts-close"),
   problems: $("problems"),
   problemList: $<HTMLUListElement>("problem-list"),
   problemCount: $("problem-count"),
@@ -46,7 +61,6 @@ const ui = {
   tabSuggestions: $("tab-suggestions"),
   suggestions: $("suggestions"),
   suggestionCount: $("suggestion-count"),
-  suggesting: $<HTMLButtonElement>("suggesting"),
   tabChecks: $("tab-checks"),
   checks: $("checks"),
   checkCount: $("check-count"),
@@ -57,6 +71,22 @@ const ui = {
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
+const RECENT = "tuhi.recent";
+const SIDEBAR = "tuhi.sidebar";
+const SIDEBAR_WIDTH = "tuhi.sidebarWidth";
+
+const stored = (key: string) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const store = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+};
 
 let project: api.Project | null = null;
 let issues: api.Issue[] = [];
@@ -80,7 +110,7 @@ const citations = new Citations({
 
 const editor = new Editor($("editor"), {
   onSave: () => void saveAndCompile(),
-  onDirtyChange: () => (ui.dirty.hidden = editor.dirtyFiles().length === 0),
+  onDirtyChange: () => dirtyChanged(),
   onForwardSync: (line, column) => void forwardSync(line, column),
   onMarkerClick: (marker, x, y) => void showProvenance(marker, x, y),
   onMarksChange: () => marksChanged(),
@@ -108,8 +138,7 @@ const reviewPanel = new ReviewPanel(ui.review, {
     if (!project) return;
     const fresh = await api.openProject(project.root);
     project.files = fresh.files;
-    ui.file.replaceChildren(...project.files.map((f) => new Option(f, f)));
-    if (editor.file) ui.file.value = editor.file;
+    renderFiles();
   },
 });
 
@@ -152,15 +181,19 @@ async function loadProject(path: string) {
     await saveSidecar();
   }
   project = await api.openProject(path);
-  try {
-    localStorage.setItem(LAST_PROJECT, project.root);
-  } catch {}
+  store(LAST_PROJECT, project.root);
+  remember(project.root);
   document.title = `${project.name} — tuhi`;
   ui.projectName.textContent = project.name;
-  ui.file.replaceChildren(...project.files.map((f) => new Option(f, f)));
-  ui.file.disabled = false;
+  ui.fileFilter.value = "";
+  pdfPath = null;
+  ui.sectionList.replaceChildren();
+  ui.sectionsSection.hidden = true;
+  renderFiles();
   ui.compile.disabled = !project.main;
   ui.empty.hidden = true;
+  syncMenu();
+  void api.watchProject(project.root).catch((e) => setStatus(`Not watching the folder for changes: ${e}`, true));
   editor.reset();
   preview.clear();
   citations.set(null, "");
@@ -189,7 +222,8 @@ async function openFile(file: string, line?: number, column?: number) {
   if (!project) return;
   await ensureLoaded(file);
   if (editor.file !== file) editor.show(file);
-  ui.file.value = file;
+  ui.fileName.textContent = file;
+  renderFiles();
   showProblemsInEditor();
   updateMarkers();
   if (line) editor.goTo(line, column);
@@ -218,12 +252,16 @@ let sidecar: { version: 1; files: Record<string, Stored[]> } = { version: 1, fil
 /** Marks whose text vanished from a loaded file; kept so nothing is silently dropped. */
 const lostMarks = new Map<string, Stored[]>();
 let sidecarTimer = 0;
+/** The sidecar as last read or written, to tell tuhi's own writes from other programs'. */
+let sidecarText = "";
 
 async function loadSidecar(root: string) {
   sidecar = { version: 1, files: {} };
   lostMarks.clear();
+  sidecarText = "";
   try {
-    const parsed = JSON.parse(await api.readText(root, SIDECAR));
+    sidecarText = await api.readText(root, SIDECAR);
+    const parsed = JSON.parse(sidecarText);
     if (parsed && typeof parsed.files === "object") sidecar = { version: 1, files: parsed.files };
   } catch {}
 }
@@ -250,7 +288,8 @@ async function saveSidecar() {
   const had = Object.keys(sidecar.files).length > 0;
   sidecar = { version: 1, files };
   if (!had && !Object.keys(files).length) return;
-  await api.writeText(project.root, SIDECAR, JSON.stringify(sidecar, null, 2) + "\n").catch(report);
+  sidecarText = JSON.stringify(sidecar, null, 2) + "\n";
+  await api.writeText(project.root, SIDECAR, sidecarText).catch(report);
 }
 
 function suggestionEntries(): Entry[] {
@@ -283,9 +322,11 @@ function renderSuggestions() {
 
 function setSuggesting(on: boolean) {
   editor.setSuggestingMode(on);
-  ui.suggesting.textContent = on ? "✎ Suggesting" : "Editing";
-  ui.suggesting.classList.toggle("on", on);
+  ui.modeEdit.classList.toggle("on", !on);
+  ui.modeSuggest.classList.toggle("on", on);
+  document.body.classList.toggle("suggesting", on);
   suggestionsPanel.render();
+  syncMenu();
   setStatus(on ? "Suggesting: your edits become suggestions" : "Editing: your edits change the text");
 }
 
@@ -591,6 +632,106 @@ function explainRow(issue: api.Issue): HTMLElement {
   return box;
 }
 
+// Changes made outside tuhi
+
+let changedPaths = new Set<string>();
+let changeTimer = 0;
+let compiledAt = 0;
+
+void listen<{ root: string; paths: string[] }>("project-changed", ({ payload }) => {
+  if (payload.root !== project?.root) return;
+  for (const path of payload.paths) changedPaths.add(path);
+  // Programs often write a file in several steps; wait for them to finish.
+  clearTimeout(changeTimer);
+  changeTimer = window.setTimeout(() => {
+    const paths = changedPaths;
+    changedPaths = new Set();
+    void refreshFromDisk(paths).catch(report);
+  }, 500);
+});
+
+/**
+ * Brings tuhi up to date with files edited elsewhere: open files, the file list, suggestions,
+ * reviews and settings, then recompiles if the paper changed. `paths` null means check
+ * everything (the Refresh button); then unsaved edits here may be discarded after asking.
+ */
+async function refreshFromDisk(paths: Set<string> | null) {
+  if (!project) return;
+  const root = project.root;
+  const manual = paths === null;
+  const touched = (file: string) => manual || paths.has(file);
+
+  const fresh = await api.openProject(root);
+  if (project?.root !== root) return;
+  if (fresh.files.join("\n") !== project.files.join("\n")) {
+    project.files = fresh.files;
+    renderFiles();
+  }
+  if (!project.main && fresh.main) {
+    project.main = fresh.main;
+    ui.compile.disabled = false;
+  }
+
+  const reloaded: string[] = [];
+  const conflicts: string[] = [];
+  for (const file of project.files.filter((f) => editor.has(f) && touched(f))) {
+    const text = await api.readText(root, file).catch(() => null);
+    if (text === null || text === editor.savedText(file)) continue;
+    if (editor.text(file) === text) {
+      editor.markSaved(file, text);
+    } else if (editor.dirtyFiles().includes(file)) {
+      conflicts.push(file);
+    } else {
+      editor.reloadText(file, text);
+      reloaded.push(file);
+    }
+  }
+  if (conflicts.length && manual && confirm(`${conflicts.join(", ")} changed on disk, and you have unsaved edits to ${conflicts.length > 1 ? "them" : "it"} here.\n\nDiscard your edits and take the version on disk?`)) {
+    for (const file of conflicts.splice(0)) {
+      editor.reloadText(file, await api.readText(root, file));
+      reloaded.push(file);
+    }
+  }
+  dirtyChanged();
+
+  if (touched(SIDECAR) && !sidecarTimer) {
+    const text = await api.readText(root, SIDECAR).catch(() => "");
+    if (text !== sidecarText) {
+      await loadSidecar(root);
+      for (const file of project.files.filter((f) => editor.has(f))) {
+        const stored = sidecar.files[file] ?? [];
+        const { placed, lost } = reanchor(editor.text(file), stored);
+        editor.setMarks(file, placed);
+        lostMarks.set(file, stored.filter((s) => lost.some((m) => m.id === s.id)));
+      }
+      renderSuggestions();
+    }
+  }
+  if (touched(SETTINGS)) {
+    const text = await api.readText(root, SETTINGS).catch(() => "");
+    if (text && text !== JSON.stringify(settings, null, 2) + "\n") {
+      await loadSettings(root);
+      void runChecks();
+    }
+  }
+  const reviewsChanged = manual || [...paths].some((p) => p.startsWith(".tuhi/reviews/") && p.endsWith(".json"));
+  if (reviewsChanged) await reviewPanel.reload();
+  if (manual) {
+    void versionsPanel.reload();
+    void claimsPanel.reload();
+  }
+
+  // Loaded files count only if their text changed; anything else in the paper folder (a
+  // figure, an unopened .tex) counts unless it was written while tuhi itself was compiling.
+  const quiet = compiling || Date.now() - compiledAt < 1500;
+  const other = manual || (!quiet && [...paths].some((p) => !p.startsWith(".tuhi/") && !editor.has(p)));
+  const parts: string[] = [];
+  if (reloaded.length) parts.push(`Reloaded ${reloaded.join(", ")} from disk`);
+  if (conflicts.length) parts.push(`${conflicts.join(", ")} changed on disk but has unsaved edits here; saving will overwrite the other version`);
+  if (parts.length) setStatus(parts.join(" · "), conflicts.length > 0);
+  if ((reloaded.length || other) && project.main) await runCompile();
+}
+
 // Compiling
 
 async function saveDirty(): Promise<boolean> {
@@ -601,7 +742,7 @@ async function saveDirty(): Promise<boolean> {
       await api.writeText(project.root, file, text);
       editor.markSaved(file, text);
     }
-    ui.dirty.hidden = true;
+    dirtyChanged();
     return true;
   } catch (error) {
     report(error);
@@ -627,8 +768,13 @@ async function runCompile() {
   try {
     const result = await api.compile(root, main);
     if (project?.root !== root) return;
-    if (result.pdf) await preview.load(await api.readPdf(root, main));
+    if (result.pdf) {
+      await preview.load(await api.readPdf(root, main));
+      pdfPath = result.pdf;
+      syncMenu();
+    }
     showIssues(result.issues, result.log);
+    void refreshSections();
     void refreshProvenance();
     void refreshCitations(true);
     void claimsPanel.reload();
@@ -642,6 +788,7 @@ async function runCompile() {
     report(error);
   } finally {
     compiling = false;
+    compiledAt = Date.now();
     ui.compile.disabled = !project?.main;
     if (compileQueued) {
       compileQueued = false;
@@ -880,77 +1027,404 @@ function selectTab(log: boolean) {
   ui.tabLog.classList.toggle("active", log);
   ui.problemList.hidden = log;
   ui.log.hidden = !log;
-  ui.problems.classList.remove("collapsed");
+  setProblems(true);
 }
 
 type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions" | "checks" | "outline" | "versions";
 
+const sides: Record<Side, { tab: HTMLElement; pane: HTMLElement }> = {
+  pdf: { tab: ui.tabPdf, pane: ui.preview },
+  suggestions: { tab: ui.tabSuggestions, pane: ui.suggestions },
+  checks: { tab: ui.tabChecks, pane: ui.checks },
+  outline: { tab: ui.tabOutline, pane: ui.outline },
+  review: { tab: ui.tabReview, pane: ui.review },
+  versions: { tab: ui.tabVersions, pane: ui.versions },
+  claims: { tab: ui.tabClaims, pane: ui.claims },
+  provenance: { tab: ui.tabProvenance, pane: ui.provenance },
+};
+
 function showSide(side: Side) {
-  ui.tabPdf.classList.toggle("active", side === "pdf");
-  ui.tabReview.classList.toggle("active", side === "review");
-  ui.tabProvenance.classList.toggle("active", side === "provenance");
-  ui.preview.hidden = side !== "pdf";
-  ui.review.hidden = side !== "review";
-  ui.provenance.hidden = side !== "provenance";
-  ui.tabClaims.classList.toggle("active", side === "claims");
-  ui.claims.hidden = side !== "claims";
-  ui.tabSuggestions.classList.toggle("active", side === "suggestions");
-  ui.suggestions.hidden = side !== "suggestions";
-  ui.tabChecks.classList.toggle("active", side === "checks");
-  ui.checks.hidden = side !== "checks";
-  ui.tabOutline.classList.toggle("active", side === "outline");
-  ui.outline.hidden = side !== "outline";
-  ui.tabVersions.classList.toggle("active", side === "versions");
-  ui.versions.hidden = side !== "versions";
+  for (const [name, { tab, pane }] of Object.entries(sides)) {
+    tab.classList.toggle("active", name === side);
+    pane.hidden = name !== side;
+  }
+  sides[side].tab.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
+
+/** Shows a panel and brings what it lists up to date. */
+function openPanel(side: Side) {
+  showSide(side);
+  if (side === "outline") void refreshOutline(true);
+  else if (side === "versions") void versionsPanel.reload();
+  else if (side === "checks") void runChecks();
+}
+
+// Sidebar: files and sections
+
+/** The last compiled PDF, for Export and Open in Preview. */
+let pdfPath: string | null = null;
+/** Folders collapsed in the file tree, kept while the app is open. */
+const collapsedDirs = new Set<string>();
+
+function dirtyChanged() {
+  ui.dirty.hidden = editor.dirtyFiles().length === 0;
+  renderFiles();
+}
+
+const fileKind = (file: string) => {
+  const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "tex") return "tex";
+  if (ext === "bib") return "bib";
+  if (["pdf", "png", "jpg", "jpeg", "eps", "svg"].includes(ext)) return "image";
+  if (["sty", "cls", "bst"].includes(ext)) return "style";
+  return "other";
+};
+
+function fileRow(file: string, label: string, depth: number): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = `tree-file kind-${fileKind(file)}`;
+  li.classList.toggle("current", file === editor.file);
+  li.style.setProperty("--depth", String(depth));
+  li.title = file;
+  const name = document.createElement("span");
+  name.className = "tree-name";
+  name.textContent = label;
+  li.append(name);
+  if (file === project?.main) {
+    const badge = document.createElement("span");
+    badge.className = "tree-badge";
+    badge.textContent = "main";
+    li.append(badge);
+  }
+  if (editor.dirtyFiles().includes(file)) {
+    const dot = document.createElement("span");
+    dot.className = "tree-dirty";
+    dot.textContent = "●";
+    dot.title = "Unsaved changes";
+    li.append(dot);
+  }
+  li.addEventListener("click", () => void openFile(file).catch(report));
+  return li;
+}
+
+/** The file tree, or a flat list of matches while filtering. */
+function renderFiles() {
+  if (!project) return ui.fileTree.replaceChildren();
+  const query = ui.fileFilter.value.trim().toLowerCase();
+  if (query) {
+    const matches = project.files.filter((f) => f.toLowerCase().includes(query));
+    ui.fileTree.replaceChildren(...matches.map((f) => fileRow(f, f, 0)));
+    if (!matches.length) {
+      const li = document.createElement("li");
+      li.className = "tree-none";
+      li.textContent = "No matching files";
+      ui.fileTree.append(li);
+    }
+    ui.fileTree.firstElementChild?.classList.add("match");
+    return;
+  }
+  const rows: HTMLLIElement[] = [];
+  const shownDirs = new Set<string>();
+  for (const file of project.files) {
+    const parts = file.split("/");
+    // Folder rows for each level not shown yet; nothing inside a collapsed folder.
+    let hidden = false;
+    for (let d = 0; d < parts.length - 1 && !hidden; d++) {
+      const dir = parts.slice(0, d + 1).join("/");
+      if (!shownDirs.has(dir)) {
+        shownDirs.add(dir);
+        const li = document.createElement("li");
+        li.className = "tree-dir";
+        li.classList.toggle("collapsed", collapsedDirs.has(dir));
+        li.style.setProperty("--depth", String(d));
+        li.textContent = parts[d];
+        li.addEventListener("click", () => {
+          if (!collapsedDirs.delete(dir)) collapsedDirs.add(dir);
+          renderFiles();
+        });
+        rows.push(li);
+      }
+      hidden = collapsedDirs.has(dir);
+    }
+    if (!hidden) rows.push(fileRow(file, parts.at(-1)!, parts.length - 1));
+  }
+  ui.fileTree.replaceChildren(...rows);
+}
+
+let sectionsRun = 0;
+
+/** The sections list in the sidebar, from the editor's text. */
+async function refreshSections() {
+  if (!project?.main) return;
+  const { root, main, files } = project;
+  const run = ++sectionsRun;
+  const texts = new Map<string, string>();
+  await Promise.all(
+    files
+      .filter((f) => f.endsWith(".tex"))
+      .map(async (f) => texts.set(f, editor.has(f) ? editor.text(f) : await api.readText(root, f).catch(() => ""))),
+  );
+  if (run !== sectionsRun || project?.root !== root) return;
+  const { sections } = outline(main, texts);
+  ui.sectionsSection.hidden = !sections.length;
+  ui.sectionList.replaceChildren(
+    ...sections.map((s) => {
+      const li = document.createElement("li");
+      li.className = `tree-section level-${s.level}`;
+      li.textContent = s.level === 0 ? "Abstract" : s.title;
+      li.title = `${s.file}:${s.line} · ${s.words} words`;
+      li.addEventListener("click", () => void openFile(s.file, s.line).catch(report));
+      return li;
+    }),
+  );
+}
+
+function setSidebar(open: boolean) {
+  document.body.classList.toggle("sidebar-hidden", !open);
+  store(SIDEBAR, open ? "1" : "0");
+  syncMenu();
+}
+
+const sidebarOpen = () => !document.body.classList.contains("sidebar-hidden");
+
+function setProblems(open: boolean) {
+  ui.problems.classList.toggle("collapsed", !open);
+  syncMenu();
+}
+
+// Recent folders and the menu bar
+
+function recentFolders(): string[] {
+  try {
+    const list = JSON.parse(stored(RECENT) ?? "[]");
+    return Array.isArray(list) ? list.filter((p) => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function remember(root: string) {
+  store(RECENT, JSON.stringify([root, ...recentFolders().filter((p) => p !== root)].slice(0, 10)));
+  renderRecent();
+}
+
+const folderLabel = (path: string) => {
+  const name = path.split("/").filter(Boolean).at(-1) ?? path;
+  const parent = path.slice(0, path.length - name.length).replace(/\/$/, "").replace(/^\/Users\/[^/]+/, "~");
+  return { name, parent };
+};
+
+function renderRecent() {
+  const recent = recentFolders();
+  ui.welcomeRecent.hidden = !recent.length;
+  ui.recentList.replaceChildren(
+    ...recent.slice(0, 6).map((path) => {
+      const { name, parent } = folderLabel(path);
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.className = "recent-item";
+      const strong = document.createElement("span");
+      strong.textContent = name;
+      const small = document.createElement("small");
+      small.textContent = parent;
+      b.append(strong, small);
+      b.addEventListener("click", () => void loadProject(path).catch(report));
+      li.append(b);
+      return li;
+    }),
+  );
+}
+
+function syncMenu() {
+  void api
+    .setMenuState({
+      recent: recentFolders().map((p) => {
+        const { name, parent } = folderLabel(p);
+        return `${name} — ${parent}`;
+      }),
+      project: project !== null,
+      pdf: pdfPath !== null,
+      suggesting: editor.isSuggesting(),
+      sidebar: sidebarOpen(),
+      problems: !ui.problems.classList.contains("collapsed"),
+    })
+    .catch(() => {});
+}
+
+// Exporting
+
+async function exportPdf() {
+  if (!project?.main || !pdfPath) return;
+  const name = project.main.split("/").at(-1)!.replace(/\.tex$/, "");
+  const to = await save({ title: "Export PDF", defaultPath: `${project.name === name ? name : `${project.name}-${name}`}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
+  if (!to) return;
+  await api.exportPdf(project.root, project.main, to);
+  setStatus(`Exported ${to.split("/").at(-1)}`);
+}
+
+async function exportSource() {
+  if (!project?.main) return;
+  if (!(await saveDirty())) return;
+  const to = await save({ title: "Export source for submission", defaultPath: `${project.name}-source.zip`, filters: [{ name: "Zip archive", extensions: ["zip"] }] });
+  if (!to) return;
+  setStatus("Zipping the sources…");
+  const count = await api.exportSource(project.root, project.main, to);
+  setStatus(`Exported ${count} files to ${to.split("/").at(-1)} (with the .bbl, so BibTeX isn't needed)`);
+}
+
+// Menu commands
+
+/** Last time each command ran: a shortcut can arrive both from the page and the menu bar. */
+const lastRun = new Map<string, number>();
+
+async function command(id: string) {
+  const now = Date.now();
+  if (now - (lastRun.get(id) ?? 0) < 300) return;
+  lastRun.set(id, now);
+
+  if (id.startsWith("recent:")) {
+    const path = recentFolders()[Number(id.slice(7))];
+    if (path) await loadProject(path);
+    return;
+  }
+  if (id.startsWith("panel:")) return openPanel(id.slice(6) as Side);
+  switch (id) {
+    case "open":
+      return chooseProject();
+    case "recent-clear":
+      store(RECENT, "[]");
+      renderRecent();
+      return syncMenu();
+    case "shortcuts":
+      ui.shortcuts.hidden = false;
+      return ui.shortcutsClose.focus();
+    case "sidebar":
+      return setSidebar(!sidebarOpen());
+  }
+  if (!project) return;
+  switch (id) {
+    case "quick-open":
+      setSidebar(true);
+      ui.fileFilter.focus();
+      return ui.fileFilter.select();
+    case "save":
+    case "compile":
+      return saveAndCompile();
+    case "refresh":
+      return refreshFromDisk(null);
+    case "export-pdf":
+      return exportPdf();
+    case "export-source":
+      return exportSource();
+    case "reveal":
+      return api.openPath(project.root);
+    case "open-pdf":
+      return pdfPath ? api.openPath(pdfPath) : undefined;
+    case "find":
+      return editor.find();
+    case "suggesting":
+      return setSuggesting(!editor.isSuggesting());
+    case "comment":
+    case "ask-claude":
+      showSide("suggestions");
+      return suggestionsPanel.openComposer(id === "comment" ? "comment" : "claude");
+    case "problems":
+      return setProblems(ui.problems.classList.contains("collapsed"));
+    case "sync":
+      return editor.syncCursor();
+    case "checks":
+      return openPanel("checks");
+    case "snapshot":
+      openPanel("versions");
+      return versionsPanel.focusName();
+    case "compare":
+    case "export-diff":
+      openPanel("versions");
+      return versionsPanel.focusCompare();
+    case "review-import":
+      showSide("review");
+      return reviewPanel.importPdf();
+    case "review-paste":
+      showSide("review");
+      return reviewPanel.showPaste();
+    case "review-new":
+      showSide("review");
+      return reviewPanel.startRound();
+    case "review-draft-all":
+      showSide("review");
+      return reviewPanel.draftAll();
+    case "review-check":
+      showSide("review");
+      return reviewPanel.finishing("check");
+    case "review-letter":
+    case "export-letter":
+      showSide("review");
+      return reviewPanel.finishing("letter");
+    case "review-diff":
+      showSide("review");
+      return reviewPanel.finishing("diff");
+  }
+}
+
+const run = (id: string) => () => void command(id).catch(report);
+
+void listen<string>("menu", ({ payload }) => void command(payload).catch(report));
 
 // Wiring
 
-ui.tabPdf.addEventListener("click", () => showSide("pdf"));
-ui.tabReview.addEventListener("click", () => showSide("review"));
-ui.tabProvenance.addEventListener("click", () => showSide("provenance"));
-ui.tabClaims.addEventListener("click", () => showSide("claims"));
-ui.tabSuggestions.addEventListener("click", () => showSide("suggestions"));
-ui.tabOutline.addEventListener("click", () => {
-  showSide("outline");
-  void refreshOutline(true);
-});
-ui.tabVersions.addEventListener("click", () => {
-  showSide("versions");
-  void versionsPanel.reload();
-});
-ui.tabChecks.addEventListener("click", () => {
-  showSide("checks");
-  void runChecks();
-});
-ui.suggesting.addEventListener("click", () => setSuggesting(!editor.isSuggesting()));
-ui.open.addEventListener("click", () => void chooseProject().catch(report));
+for (const [name, { tab }] of Object.entries(sides)) tab.addEventListener("click", () => openPanel(name as Side));
+ui.modeEdit.addEventListener("click", () => setSuggesting(false));
+ui.modeSuggest.addEventListener("click", () => setSuggesting(true));
 ui.compile.addEventListener("click", () => void saveAndCompile());
-ui.file.addEventListener("change", () => void openFile(ui.file.value).catch(report));
+ui.sidebarToggle.addEventListener("click", run("sidebar"));
+ui.welcomeOpen.addEventListener("click", run("open"));
+ui.shortcutsClose.addEventListener("click", () => (ui.shortcuts.hidden = true));
+ui.shortcuts.addEventListener("click", (e) => {
+  if (e.target === ui.shortcuts) ui.shortcuts.hidden = true;
+});
 ui.tabProblems.addEventListener("click", () => selectTab(false));
 ui.tabLog.addEventListener("click", () => selectTab(true));
-ui.problemsToggle.addEventListener("click", () => {
-  const collapsed = ui.problems.classList.toggle("collapsed");
-  ui.problemsToggle.textContent = collapsed ? "▴" : "▾";
+ui.problemsToggle.addEventListener("click", run("problems"));
+
+ui.fileFilter.addEventListener("input", () => renderFiles());
+ui.fileFilter.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const first = project?.files.find((f) => f.toLowerCase().includes(ui.fileFilter.value.trim().toLowerCase()));
+    ui.fileFilter.value = "";
+    renderFiles();
+    if (first) void openFile(first).then(() => editor.focus()).catch(report);
+  } else if (e.key === "Escape") {
+    ui.fileFilter.value = "";
+    renderFiles();
+    editor.focus();
+  }
 });
 
+// The menu bar owns the shortcuts; these cover the browser preview and focused text fields.
 document.addEventListener("keydown", (event) => {
   const mod = event.metaKey || event.ctrlKey;
-  if (mod && event.shiftKey && event.key.toLowerCase() === "e") {
+  if (event.key === "Escape" && !ui.shortcuts.hidden) {
+    ui.shortcuts.hidden = true;
+  } else if (mod && event.shiftKey && event.key.toLowerCase() === "e") {
     event.preventDefault();
-    setSuggesting(!editor.isSuggesting());
+    void command("suggesting");
   } else if (mod && event.altKey && (event.code === "KeyM" || event.code === "KeyK")) {
     // ⌥ changes event.key on macOS, so match the physical key.
     event.preventDefault();
-    showSide("suggestions");
-    suggestionsPanel.openComposer(event.code === "KeyM" ? "comment" : "claude");
-  } else if (mod && event.key === "o") {
+    void command(event.code === "KeyM" ? "comment" : "ask-claude");
+  } else if (mod && event.shiftKey && event.key.toLowerCase() === "r") {
     event.preventDefault();
-    void chooseProject().catch(report);
+    void command("refresh").catch(report);
+  } else if (mod && !event.shiftKey && event.key === "o") {
+    event.preventDefault();
+    void command("open").catch(report);
+  } else if (mod && !event.shiftKey && event.key === "p") {
+    event.preventDefault();
+    void command("quick-open");
   } else if (mod && event.key === "s") {
     // The editor handles this when focused; this catches it everywhere else.
     event.preventDefault();
-    void saveAndCompile();
+    void command("save");
   }
 });
 
@@ -965,8 +1439,37 @@ ui.divider.addEventListener("pointerdown", (event) => {
   ui.divider.addEventListener("pointerup", () => ui.divider.removeEventListener("pointermove", move), { once: true });
 });
 
-let lastProject: string | null = null;
-try {
-  lastProject = localStorage.getItem(LAST_PROJECT);
-} catch {}
+ui.sidebarResize.addEventListener("pointerdown", (event) => {
+  ui.sidebarResize.setPointerCapture(event.pointerId);
+  document.body.classList.add("resizing");
+  const move = (e: PointerEvent) => {
+    const width = Math.min(420, Math.max(160, e.clientX));
+    document.body.style.setProperty("--sidebar-width", `${width}px`);
+  };
+  ui.sidebarResize.addEventListener("pointermove", move);
+  ui.sidebarResize.addEventListener(
+    "pointerup",
+    () => {
+      ui.sidebarResize.removeEventListener("pointermove", move);
+      document.body.classList.remove("resizing");
+      store(SIDEBAR_WIDTH, document.body.style.getPropertyValue("--sidebar-width"));
+    },
+    { once: true },
+  );
+});
+
+// Files and Sections fold away under their headings.
+for (const section of document.querySelectorAll<HTMLElement>(".sidebar-section")) {
+  const key = `tuhi.folded.${section.id}`;
+  section.classList.toggle("folded", stored(key) === "1");
+  section.querySelector(".section-toggle")!.addEventListener("click", () => store(key, section.classList.toggle("folded") ? "1" : "0"));
+}
+
+const width = stored(SIDEBAR_WIDTH);
+if (width) document.body.style.setProperty("--sidebar-width", width);
+if (stored(SIDEBAR) === "0") document.body.classList.add("sidebar-hidden");
+renderRecent();
+syncMenu();
+
+const lastProject = stored(LAST_PROJECT);
 if (lastProject) void loadProject(lastProject).catch(report);

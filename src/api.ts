@@ -42,6 +42,7 @@ export interface SourceLocation {
 
 export const openProject = (path: string) => invoke<Project>("open_project", { path });
 
+export const watchProject = (root: string) => invoke<void>("watch_project", { root });
 export const readText = (root: string, file: string) => invoke<string>("read_text", { root, file });
 
 export const writeText = (root: string, file: string, contents: string) =>
@@ -128,6 +129,19 @@ export interface Revision {
 /** Writes response/<round>.tex and returns its root-relative path. */
 export const writeLetter = (root: string, main: string, review: unknown) =>
   invoke<string>("write_letter", { root, main, review });
+
+export interface EditProblem {
+  card: string;
+  file: string;
+  line: number | null;
+  /** Sentences of the edit no longer in the text; all of it when `gone`. */
+  missing: string[];
+  gone: boolean;
+}
+
+/** Accepted edits partly or wholly gone from the text; reworded or rewritten-again ones are fine. */
+export const reviewEditProblems = (root: string, review: unknown, sources: Record<string, string>) =>
+  invoke<EditProblem[]>("review_edit_problems", { root, review, sources });
 
 export const gitRevisions = (root: string) => invoke<Revision[]>("git_revisions", { root });
 
@@ -334,3 +348,21 @@ export const snapshotDelete = (root: string, id: string) => invoke<void>("snapsh
 /** `newRev` null: compare with the current files. */
 export const versionChanges = (root: string, old: string, newRev: string | null) =>
   invoke<FileChange[]>("version_changes", { root, old, new: newRev });
+
+export interface MenuState {
+  /** Labels for File ▸ Open Recent; clicking one sends `recent:<index>`. */
+  recent: string[];
+  project: boolean;
+  pdf: boolean;
+  suggesting: boolean;
+  sidebar: boolean;
+  problems: boolean;
+}
+
+export const setMenuState = (state: MenuState) => invoke<void>("set_menu_state", { state });
+
+/** Copies the last compiled PDF to `to`. */
+export const exportPdf = (root: string, main: string, to: string) => invoke<void>("export_pdf", { root, main, to });
+
+/** Zips the sources and compiled .bbl for submission; returns how many files went in. */
+export const exportSource = (root: string, main: string, to: string) => invoke<number>("export_source", { root, main, to });

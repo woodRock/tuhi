@@ -5,6 +5,7 @@ mod draft;
 mod explain;
 mod latexdiff;
 mod letter;
+mod menu;
 mod project;
 mod review;
 mod snapshots;
@@ -13,6 +14,7 @@ mod synctex;
 mod ruru;
 mod taura;
 mod tools;
+mod watch;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -166,8 +168,14 @@ async fn draft_change(root: String, card: serde_json::Value) -> Result<draft::Pr
 }
 
 #[tauri::command]
-fn write_letter(root: String, main: String, review: serde_json::Value) -> Result<String, String> {
-    letter::write(Path::new(&root), &main, &review)
+fn write_letter(app: AppHandle, root: String, main: String, review: serde_json::Value) -> Result<String, String> {
+    let pdf = pdf_for(&app, &root, &main)?;
+    letter::write(Path::new(&root), &main, &review, Some(&pdf))
+}
+
+#[tauri::command]
+fn review_edit_problems(root: String, review: serde_json::Value, sources: std::collections::HashMap<String, String>) -> Vec<letter::EditProblem> {
+    letter::edit_problems(Path::new(&root), &review, sources)
 }
 
 #[tauri::command]
@@ -207,6 +215,75 @@ fn open_path(path: String) -> Result<(), String> {
         std::process::Command::new("xdg-open")
     };
     cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Rebuilds the menu bar for what's open, enabled and checked.
+#[tauri::command]
+fn set_menu_state(app: AppHandle, state: menu::MenuState) -> Result<(), String> {
+    let menu = menu::build(&app, &state).map_err(|e| e.to_string())?;
+    app.set_menu(menu).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Copies the last compiled PDF to `to`.
+#[tauri::command]
+fn export_pdf(app: AppHandle, root: String, main: String, to: String) -> Result<(), String> {
+    let pdf = pdf_for(&app, &root, &main)?;
+    fs::copy(&pdf, &to).map(|_| ()).map_err(|e| format!("{}: {e}", pdf.display()))
+}
+
+/// Zips the paper's sources for a journal or arXiv: everything but git, tuhi's own files and
+/// TeX's build output, plus the compiled .bbl so the bibliography builds without BibTeX.
+#[tauri::command]
+fn export_source(app: AppHandle, root: String, main: String, to: String) -> Result<usize, String> {
+    let root = Path::new(&root);
+    let mut files = Vec::new();
+    collect_sources(root, root, &mut files);
+    // The paper's own PDF, if Overleaf or an earlier build left one in the folder.
+    let own_pdf = Path::new(&main).with_extension("pdf").to_string_lossy().into_owned();
+    files.retain(|f| *f != own_pdf);
+    let _ = fs::remove_file(&to);
+    let bbl = pdf_for(&app, &root.to_string_lossy(), &main)?.with_extension("bbl");
+    let bbl_name = Path::new(&main).with_extension("bbl").to_string_lossy().into_owned();
+    // A .bbl already in the folder wins over the build's copy.
+    let add_bbl = bbl.exists() && !files.contains(&bbl_name);
+    let zip = |dir: &Path, list: &[String]| -> Result<(), String> {
+        use std::io::Write;
+        let mut child = std::process::Command::new("zip")
+            .args(["-q", &to, "-@"])
+            .current_dir(dir)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("zip: {e}"))?;
+        child.stdin.take().unwrap().write_all(list.join("\n").as_bytes()).map_err(|e| e.to_string())?;
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if status.success() { Ok(()) } else { Err(format!("zip failed ({status})")) }
+    };
+    zip(root, &files)?;
+    if add_bbl {
+        let staging = std::env::temp_dir().join(format!("tuhi-bbl-{}", std::process::id()));
+        let staged = staging.join(&bbl_name);
+        fs::create_dir_all(staged.parent().unwrap()).map_err(|e| e.to_string())?;
+        fs::copy(&bbl, &staged).map_err(|e| e.to_string())?;
+        let result = zip(&staging, &[bbl_name]);
+        let _ = fs::remove_dir_all(&staging);
+        result?;
+    }
+    Ok(files.len() + add_bbl as usize)
+}
+
+fn collect_sources(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_sources(root, &path, out);
+        } else if let Some(rel) = watch::relevant(root, &path) {
+            if !rel.starts_with(".tuhi/") && !rel.starts_with("response/") && !rel.ends_with(".DS_Store") {
+                out.push(rel);
+            }
+        }
+    }
+    out.sort();
 }
 
 /// taura's status, findings and pending publish changes; None if the paper isn't paired.
@@ -323,10 +400,23 @@ async fn version_changes(root: String, old: String, new: Option<String>) -> Resu
         .map_err(|e| e.to_string())?
 }
 
+/// Watches the paper folder and sends `project-changed` events for edits made outside tuhi.
+#[tauri::command]
+fn watch_project(app: AppHandle, state: tauri::State<watch::State>, root: String) -> Result<(), String> {
+    watch::watch(app, &state, Path::new(&root))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(watch::State::default())
+        .setup(|app| {
+            let menu = menu::build(app.handle(), &menu::MenuState { sidebar: true, problems: true, ..Default::default() })?;
+            app.set_menu(menu)?;
+            Ok(())
+        })
+        .on_menu_event(menu::forward)
         .invoke_handler(tauri::generate_handler![
             open_project,
             read_text,
@@ -343,6 +433,7 @@ pub fn run() {
             locate_comments,
             draft_change,
             write_letter,
+            review_edit_problems,
             git_revisions,
             make_diff,
             open_path,
@@ -360,6 +451,10 @@ pub fn run() {
             snapshot_create,
             snapshot_delete,
             version_changes,
+            watch_project,
+            set_menu_state,
+            export_pdf,
+            export_source,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -368,6 +463,22 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submission_zip_leaves_out_build_and_tuhi_files() {
+        let dir = std::env::temp_dir().join(format!("tuhi-sources-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        for f in ["main.tex", "refs.bib", "figs/a.pdf", "main.aux", ".tuhi/settings.json", ".git/HEAD", "response/revision-1.tex"] {
+            let path = dir.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        let root = dir.canonicalize().unwrap();
+        let mut files = Vec::new();
+        collect_sources(&root, &root, &mut files);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(files, ["figs/a.pdf", "main.tex", "refs.bib"]);
+    }
 
     /// End-to-end against a real paper: `TUHI_TEST_PROJECT=/path cargo test -- --ignored`.
     #[test]
@@ -406,6 +517,31 @@ mod tests {
 
     /// Letter and latexdiff on a git checkout with an edit applied:
     /// `TUHI_TEST_GIT_PROJECT=/path cargo test letter_and_diff -- --ignored --nocapture`.
+    /// Writes the letter for a real review in a copy of its paper, compiled first so the
+    /// letter has section and page numbers, and prints every change's location.
+    #[test]
+    #[ignore]
+    fn letter_for_real_review() {
+        let root = PathBuf::from(std::env::var("TUHI_TEST_LETTER_PAPER").expect("set TUHI_TEST_LETTER_PAPER to a copy"));
+        let main = project::open(&root).unwrap().main.unwrap();
+        let reviews = review::list(&root).unwrap();
+        let review = reviews.last().expect("no review");
+        let out = std::env::temp_dir().join("tuhi-test-letter-paper");
+        let built = compile::compile(&root, &main, &out).unwrap();
+        let pdf = PathBuf::from(built.pdf.expect("paper didn't compile"));
+        let rel = letter::write(&root, &main, review, Some(&pdf)).unwrap();
+        let text = fs::read_to_string(root.join(&rel)).unwrap();
+        for line in text.lines().filter(|l| l.starts_with("\\item")) {
+            println!("{line}");
+        }
+        let compiled = compile::compile(&root, &rel, &std::env::temp_dir().join("tuhi-test-letter")).unwrap();
+        println!("no longer in the text: {}", text.matches("no longer in the revised text").count());
+        for p in letter::edit_problems(&root, review, Default::default()) {
+            println!("check: {} {}:{:?} gone={} missing={:?}", p.card, p.file, p.line, p.gone, p.missing);
+        }
+        assert!(compiled.ok, "{}", compiled.log.lines().filter(|l| l.starts_with('!') || l.starts_with("l.")).collect::<Vec<_>>().join("\n"));
+    }
+
     #[test]
     #[ignore]
     fn letter_and_diff_real_project() {
@@ -423,7 +559,7 @@ mod tests {
                 { "id": "R1.2", "group": "R1", "status": "open", "comment": "Typo in Fig_2." }
             ]
         });
-        let rel = letter::write(&root, "TAI_template.tex", &review).unwrap();
+        let rel = letter::write(&root, "TAI_template.tex", &review, None).unwrap();
         let out = std::env::temp_dir().join("tuhi-test-letter");
         let compiled = compile::compile(&root, &rel, &out).unwrap();
         println!("letter {rel}: ok={} pdf={:?} errors={:?}", compiled.ok, compiled.pdf,

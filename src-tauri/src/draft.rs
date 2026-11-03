@@ -103,6 +103,13 @@ fn prompt(root: &Path, files: &[String], card: &Value) -> String {
     } else {
         out.push_str("\nThe comment isn't linked to a line yet; search the source for where it applies.\n");
     }
+    if let Some(applied) = card["applied"].as_array().filter(|a| !a.is_empty()) {
+        out.push_str("\nThe author already accepted these edits for this comment; they are in the source above. Propose only what is still needed:\n");
+        for edit in applied {
+            let text = |k: &str| edit[k].as_str().unwrap_or_default().to_string();
+            out.push_str(&format!("- {}:{}: \"{}\" -> \"{}\"\n", text("file"), edit["line"], text("before"), text("after")));
+        }
+    }
     out.push_str(&format!("\nProject files: {}\n", files.join(", ")));
     out
 }

@@ -9,57 +9,122 @@
   </head>
 
   <body>
-    <header class="toolbar">
-      <button id="open" title="Open a paper folder (⌘O)">Open…</button>
-      <span id="project-name" class="project-name"></span>
-      <select id="file" title="File" disabled></select>
-      <span id="dirty" class="dirty" hidden title="Unsaved changes">●</span>
-      <span class="spacer"></span>
-      <span id="status" class="status"></span>
-      <button id="suggesting" class="mode" title="Suggesting: what you type becomes suggestions to accept later (⌘⇧E)">Editing</button>
-      <button id="compile" class="primary" title="Save and compile (⌘S)" disabled>Compile</button>
+    <header class="toolbar" data-tauri-drag-region>
+      <button id="sidebar-toggle" class="icon-button" title="Show or hide the sidebar (⌃⌘S)" aria-label="Sidebar">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.2" /><path d="M6 2.5v11" stroke="currentColor" stroke-width="1.2" /></svg>
+      </button>
+      <div class="title" data-tauri-drag-region>
+        <span id="project-name" class="project-name" data-tauri-drag-region></span>
+        <span id="file-name" class="file-name" data-tauri-drag-region></span>
+        <span id="dirty" class="dirty" hidden title="Unsaved changes (⌘S saves)">●</span>
+      </div>
+      <span class="spacer" data-tauri-drag-region></span>
+      <span id="status" class="status" data-tauri-drag-region></span>
+      <div class="segmented" role="group" aria-label="Mode">
+        <button id="mode-edit" class="on" title="Editing: what you type changes the text (⌘⇧E)">Editing</button>
+        <button id="mode-suggest" title="Suggesting: what you type becomes suggestions to accept later (⌘⇧E)">Suggesting</button>
+      </div>
+      <button id="compile" class="primary compile" title="Save and compile (⌘S)" disabled>
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor" /></svg>
+        <span>Compile</span>
+      </button>
     </header>
 
-    <main class="workspace" id="workspace">
-      <section class="source">
-        <div id="editor" class="editor">
-          <div class="empty" id="empty">
-            <p>Open a paper folder to start.</p>
-            <p class="hint">⌘S save and compile · ⌘-click source or PDF to jump · ⌘J show cursor in PDF<br />⌘⇧E suggesting mode · ⌘⌥M comment · ⌘⌥K ask Claude</p>
+    <div class="frame">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-filter">
+          <input id="file-filter" type="search" placeholder="Go to file  ⌘P" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="sidebar-scroll">
+          <section class="sidebar-section" id="files-section">
+            <h4><button class="section-toggle">Files</button></h4>
+            <ul id="file-tree" class="tree"></ul>
+          </section>
+          <section class="sidebar-section" id="sections-section" hidden>
+            <h4><button class="section-toggle">Sections</button></h4>
+            <ul id="section-list" class="tree sections"></ul>
+          </section>
+        </div>
+      </aside>
+      <div class="sidebar-resize" id="sidebar-resize"></div>
+
+      <main class="workspace" id="workspace">
+        <section class="source">
+          <div id="editor" class="editor">
+            <div class="empty" id="empty">
+              <div class="welcome">
+                <h1>tuhi</h1>
+                <p class="welcome-lead">A quiet place to write papers.</p>
+                <button id="welcome-open" class="primary">Open a paper folder…</button>
+                <div id="welcome-recent" class="welcome-recent" hidden>
+                  <h4>Recent</h4>
+                  <ul id="recent-list"></ul>
+                </div>
+                <p class="hint">Everything else lives in the menu bar · <kbd>⌘?</kbd> shows the shortcuts</p>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="problems" id="problems">
-          <div class="problems-tabs">
-            <button id="tab-problems" class="tab active">Problems <span id="problem-count"></span></button>
-            <button id="tab-log" class="tab">Log</button>
-            <span class="spacer"></span>
-            <button id="problems-toggle" class="tab" title="Show or hide">▾</button>
+          <div class="problems" id="problems">
+            <div class="problems-tabs">
+              <button id="tab-problems" class="tab active">Problems <span id="problem-count" class="count"></span></button>
+              <button id="tab-log" class="tab">Log</button>
+              <span class="spacer"></span>
+              <button id="problems-toggle" class="tab icon-tab" title="Show or hide (⌘⇧M)">
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </button>
+            </div>
+            <ul id="problem-list" class="problem-list"></ul>
+            <pre id="log" class="log" hidden></pre>
           </div>
-          <ul id="problem-list" class="problem-list"></ul>
-          <pre id="log" class="log" hidden></pre>
-        </div>
-      </section>
-      <div class="divider" id="divider"></div>
-      <section class="side">
-        <div class="side-tabs">
-          <button id="tab-pdf" class="tab active">PDF</button>
-          <button id="tab-review" class="tab">Review</button>
-          <button id="tab-provenance" class="tab">Provenance</button>
-          <button id="tab-claims" class="tab">Claims</button>
-          <button id="tab-suggestions" class="tab">Suggestions <span id="suggestion-count"></span></button>
-          <button id="tab-checks" class="tab">Checks <span id="check-count"></span></button>
-          <button id="tab-outline" class="tab">Outline</button>
-          <button id="tab-versions" class="tab">Versions</button>
-        </div>
-        <div class="preview" id="preview"></div>
-        <div class="review" id="review" hidden></div>
-        <div class="review" id="provenance" hidden></div>
-        <div class="review" id="claims" hidden></div>
-        <div class="review" id="suggestions" hidden></div>
-        <div class="review" id="checks" hidden></div>
-        <div class="review" id="outline" hidden></div>
-        <div class="review" id="versions" hidden></div>
-      </section>
-    </main>
+        </section>
+        <div class="divider" id="divider"></div>
+        <section class="side">
+          <nav class="side-tabs" id="side-tabs">
+            <button id="tab-pdf" class="tab active" title="⌘1">PDF</button>
+            <button id="tab-suggestions" class="tab" title="⌘2">Suggestions <span id="suggestion-count" class="count"></span></button>
+            <button id="tab-checks" class="tab" title="⌘3">Checks <span id="check-count" class="count"></span></button>
+            <button id="tab-outline" class="tab" title="⌘4">Outline</button>
+            <button id="tab-review" class="tab" title="⌘5">Review</button>
+            <button id="tab-versions" class="tab" title="⌘6">Versions</button>
+            <button id="tab-claims" class="tab" title="⌘7">Claims</button>
+            <button id="tab-provenance" class="tab" title="⌘8">Provenance</button>
+          </nav>
+          <div class="preview" id="preview"></div>
+          <div class="review" id="review" hidden></div>
+          <div class="review" id="provenance" hidden></div>
+          <div class="review" id="claims" hidden></div>
+          <div class="review" id="suggestions" hidden></div>
+          <div class="review" id="checks" hidden></div>
+          <div class="review" id="outline" hidden></div>
+          <div class="review" id="versions" hidden></div>
+        </section>
+      </main>
+    </div>
+
+    <div class="sheet-backdrop" id="shortcuts" hidden>
+      <div class="sheet" role="dialog" aria-label="Keyboard shortcuts">
+        <h2>Keyboard shortcuts</h2>
+        <dl class="shortcuts">
+          <dt>⌘O</dt><dd>Open a paper folder</dd>
+          <dt>⌘P</dt><dd>Go to file</dd>
+          <dt>⌘S</dt><dd>Save and compile</dd>
+          <dt>⌘B</dt><dd>Compile</dd>
+          <dt>⌘⇧R</dt><dd>Reload files changed elsewhere</dd>
+          <dt>⌘J</dt><dd>Show the cursor's line in the PDF</dd>
+          <dt>⌘-click</dt><dd>Jump between the source and the PDF</dd>
+          <dt>⌘F</dt><dd>Find in the file</dd>
+          <dt>⌘⇧E</dt><dd>Switch between editing and suggesting</dd>
+          <dt>⌘⌥M</dt><dd>Comment on the selection</dd>
+          <dt>⌘⌥K</dt><dd>Ask Claude about the selection</dd>
+          <dt>⌃⌘S</dt><dd>Show or hide the sidebar</dd>
+          <dt>⌘⇧M</dt><dd>Show or hide Problems</dd>
+          <dt>⌘1 – ⌘8</dt><dd>PDF, Suggestions, Checks, Outline, Review, Versions, Claims, Provenance</dd>
+          <dt>⌘?</dt><dd>This list</dd>
+          <dt>⌘⇧P</dt><dd>Export the PDF</dd>
+        </dl>
+        <p class="hint">Opening, exporting, reviews and versions are in the menu bar.</p>
+        <button id="shortcuts-close" class="primary">Done</button>
+      </div>
+    </div>
   </body>
 </html>

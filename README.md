@@ -12,9 +12,24 @@ npm run tauri dev
 
 ## Using it
 
-- **Open…** (⌘O) a paper folder, e.g. `~/overleaf/<name>`. The file with `\documentclass` is
-  treated as the main file and compiled straight away. The last folder reopens on launch.
-- **⌘S** saves every changed file and recompiles.
+- **File ▸ Open Folder…** (⌘O) opens a paper folder, e.g. `~/overleaf/<name>`; **Open Recent**
+  lists the last ten. The file with `\documentclass` is treated as the main file and compiled
+  straight away. The last folder reopens on launch.
+- Actions live in the menu bar: **File** (open, save, export, Show in Finder), **Edit**
+  (find, suggesting mode, comments, Ask Claude), **View** (sidebar, Problems, panels ⌘1–⌘8),
+  **Paper** (compile, checks, snapshots) and **Review** (import, draft, letter, diff).
+  **Help ▸ Keyboard Shortcuts** (⌘?) lists the shortcuts.
+- The sidebar (⌃⌘S) lists the files, marking the main file and unsaved ones, and the paper's
+  sections; click one to jump. **Go to File** (⌘P) filters the list; Return opens the first match.
+- **File ▸ Export ▸ PDF…** (⌘⇧P) saves a copy of the compiled PDF. **Source for Submission
+  (.zip)…** zips the sources for a journal or arXiv: everything except git, tuhi's files, the
+  response letters and TeX's build output, plus the compiled `.bbl`.
+- **⌘S** saves every changed file and recompiles (so does **Paper ▸ Compile**, ⌘B).
+- Edits made outside tuhi (Claude Code, a script regenerating a figure, an Overleaf pull) show up
+  by themselves: tuhi watches the folder, reloads open files you haven't changed, picks up new
+  files, suggestions, reviews and settings, and recompiles. If you have unsaved edits to a file
+  that changed on disk, tuhi keeps yours and says so. **Reload from Disk** (⌘⇧R) checks everything,
+  recompiles, and offers to take the version on disk.
 - **⌘-click** in the source shows that spot in the PDF; **⌘-click** in the PDF jumps to the source.
   **⌘J** shows the cursor's line in the PDF.
 - Problems from the TeX log and BibTeX appear under the editor and in the gutter; click one to jump.
@@ -23,7 +38,7 @@ npm run tauri dev
 
 Like suggesting mode in Google Docs: nothing reaches the `.tex` until it's accepted.
 
-- **Suggesting** (toolbar, or ⌘⇧E) turns what you type into suggestions: deleted text is
+- **Suggesting** (the Editing | Suggesting switch in the toolbar, or ⌘⇧E) turns what you type into suggestions: deleted text is
   struck through and new text shown in green, and the file itself doesn't change. Backspace takes
   back what you just typed; ⌘Z undoes suggestions too.
 - **⌘⌥M** comments on the selected text. Comments are highlighted in the editor and threaded
@@ -107,8 +122,13 @@ The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
   reason, accepted cards with no reply or no accepted edit, accepted edits that have since
   disappeared from the source, and annotations in a reviewer's PDF that have no card.
 - **Response letter** writes `response/<round>.tex` (editable, in the repo) from the replies
-  and accepted edits, quoting each change with its section and line, compiles it and opens
-  the PDF. Anything unresolved is marked in red.
+  and accepted edits, compiles it and opens the PDF. Each change is placed the way the
+  reviewer reads the revised PDF ("In Section IV-C (Synthetic Chromatograms), page 5", "In the
+  abstract"), from the last compile's section numbers and SyncTeX; the `.tex` line is kept in
+  a comment. An edit reworded since it was accepted is found by the passage that still shares
+  most of its wording and quoted as it now reads. Quotes show `\res` values, citation and
+  reference numbers as printed. Anything unresolved, including edits no longer in the text,
+  is marked in red.
 - **Diff PDF** runs `latexdiff --flatten` between a git commit and the current text and opens
   the marked-up PDF. It defaults to the commit that was current when the round started,
   normally the submitted version. It works in a scratch copy, so the repo isn't touched.
