@@ -97,8 +97,11 @@ pub(crate) fn project_for(root: &Path) -> Option<String> {
         path.map(PathBuf::from).and_then(|p| p.canonicalize().ok()).is_some_and(|p| p.starts_with(&root))
     };
     run(&["project", "list"]).ok()?.as_array()?.iter().find_map(|p| {
-        let tex = p["tex"].as_array().into_iter().flatten().any(|t| inside(t.as_str()));
-        (tex || inside(p["bib"].as_str())).then(|| p["name"].as_str().map(String::from)).flatten()
+        // `tex_paths`/`bib_path` are resolved against the project's path; `tex`/`bib` are as written
+        // in ruru.toml (maybe relative), so they are only a fallback for an older ruru.
+        let (tex, bib) = if p.get("tex_paths").is_some() { ("tex_paths", "bib_path") } else { ("tex", "bib") };
+        let tex = p[tex].as_array().into_iter().flatten().any(|t| inside(t.as_str()));
+        (tex || inside(p[bib].as_str())).then(|| p["name"].as_str().map(String::from)).flatten()
     })
 }
 
