@@ -3,11 +3,13 @@ mod claude;
 mod compile;
 mod draft;
 mod explain;
+mod git;
 mod latexdiff;
 mod letter;
 mod menu;
 mod project;
 mod review;
+mod setup;
 mod snapshots;
 mod suggest;
 mod synctex;
@@ -215,6 +217,79 @@ fn open_path(path: String) -> Result<(), String> {
         std::process::Command::new("xdg-open")
     };
     cmd.arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn git_status(root: String, fetch: bool) -> Result<git::Status, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = Path::new(&root);
+        if fetch {
+            git::fetch(root);
+        }
+        git::status(root)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn git_diff(root: String, path: String) -> Result<String, String> {
+    git::diff(Path::new(&root), &path)
+}
+
+#[tauri::command]
+async fn git_commit(root: String, message: String, paths: Vec<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::commit(Path::new(&root), &message, &paths)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn git_pull(root: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::pull(Path::new(&root))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn git_push(root: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::push(Path::new(&root))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn setup_status() -> Result<setup::Setup, String> {
+    tauri::async_runtime::spawn_blocking(setup::status).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn setup_install(name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || setup::install(&name)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn setup_init_library(path: String, email: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || setup::init_library(&path, &email)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn new_paper(paper: setup::NewPaper) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || setup::create_paper(&paper)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn link_ruru(name: String, dir: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || setup::link_ruru(&name, &dir)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn pair_taura(paper: String, code: Option<String>) -> Result<setup::Paired, String> {
+    tauri::async_runtime::spawn_blocking(move || setup::pair_taura(&paper, code.as_deref())).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn roots_get() -> Result<setup::Roots, String> {
+    tauri::async_runtime::spawn_blocking(setup::roots).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn roots_set(key: String, folder: Option<String>) -> Result<setup::Roots, String> {
+    tauri::async_runtime::spawn_blocking(move || setup::set_root(&key, folder.as_deref())).await.map_err(|e| e.to_string())?
 }
 
 /// Rebuilds the menu bar for what's open, enabled and checked.
@@ -455,6 +530,19 @@ pub fn run() {
             set_menu_state,
             export_pdf,
             export_source,
+            git_status,
+            git_diff,
+            git_commit,
+            git_pull,
+            git_push,
+            setup_status,
+            setup_install,
+            setup_init_library,
+            new_paper,
+            link_ruru,
+            pair_taura,
+            roots_get,
+            roots_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

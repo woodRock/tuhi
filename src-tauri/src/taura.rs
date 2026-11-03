@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use std::thread;
 
 #[derive(Serialize)]
@@ -43,8 +44,13 @@ fn run(root: &Path, args: &[&str]) -> Result<Value, String> {
     Ok(value)
 }
 
+/// `taura diff` rebuilds every artifact into the code repo's shared `.taura/build/`, and two
+/// builds at once delete each other's files; so reports run one at a time.
+static REPORTING: Mutex<()> = Mutex::new(());
+
 /// None when taura isn't installed or the paper isn't paired with a code repo.
 pub fn report(root: &Path) -> Result<Option<Report>, String> {
+    let _one_at_a_time = REPORTING.lock().unwrap_or_else(|e| e.into_inner());
     if tools::which("taura").is_none() {
         return Ok(None);
     }
@@ -54,7 +60,7 @@ pub fn report(root: &Path) -> Result<Option<Report>, String> {
         Err(e) if ["taura init", "not paired", "taura.lock", "is not inside"].iter().any(|m| e.contains(m)) => return Ok(None),
         Err(e) => return Err(e),
     };
-    // check is the slow one (about a second); run it and diff side by side.
+    // check is the slow one (about a second) and doesn't build; run it and diff side by side.
     let (check, diff) = thread::scope(|s| {
         let check = s.spawn(|| run(root, &["check"]));
         let diff = s.spawn(|| run(root, &["diff"]));

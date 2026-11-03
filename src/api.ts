@@ -366,3 +366,80 @@ export const exportPdf = (root: string, main: string, to: string) => invoke<void
 
 /** Zips the sources and compiled .bbl for submission; returns how many files went in. */
 export const exportSource = (root: string, main: string, to: string) => invoke<number>("export_source", { root, main, to });
+
+export interface GitChange {
+  path: string;
+  /** The old path of a rename. */
+  orig: string | null;
+  /** M modified, A added, D deleted, R renamed, ? new, U conflicted. */
+  kind: string;
+}
+
+export interface GitStatus {
+  repo: boolean;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  remote: boolean;
+  files: GitChange[];
+}
+
+/** `fetch` first asks the remote what's new (slow; failures are ignored). */
+export const gitStatus = (root: string, fetch: boolean) => invoke<GitStatus>("git_status", { root, fetch });
+export const gitDiff = (root: string, path: string) => invoke<string>("git_diff", { root, path });
+/** Commits exactly `paths`; returns the new commit's short hash. */
+export const gitCommit = (root: string, message: string, paths: string[]) => invoke<string>("git_commit", { root, message, paths });
+export const gitPull = (root: string) => invoke<string>("git_pull", { root });
+export const gitPush = (root: string) => invoke<string>("git_push", { root });
+
+export interface SetupTool {
+  name: string;
+  found: boolean;
+  version: string | null;
+  /** tuhi can install it without a password. */
+  installable: boolean;
+  about: string;
+  /** How to install it in a terminal, when tuhi can't. */
+  command: string | null;
+}
+
+export interface SetupStatus {
+  tools: SetupTool[];
+  library: { path: string; exists: boolean };
+  paper_root: string;
+  code_root: string;
+}
+
+export interface NewPaper {
+  name: string;
+  source: "template" | "clone";
+  url?: string;
+  template?: "article" | "ieee";
+  title?: string;
+  /** Add taura's preamble lines to the template. */
+  taura: boolean;
+}
+
+export const setupStatus = () => invoke<SetupStatus>("setup_status");
+export const setupInstall = (name: string) => invoke<string>("setup_install", { name });
+export const setupInitLibrary = (path: string, email: string) => invoke<string>("setup_init_library", { path, email });
+/** Creates the paper under the paper root; returns its folder. */
+export const newPaper = (paper: NewPaper) => invoke<string>("new_paper", { paper });
+export const linkRuru = (name: string, dir: string) => invoke<string>("link_ruru", { name, dir });
+/** `code` null pairs with (creating if needed) the code repo of the same name. */
+export const pairTaura = (paper: string, code: string | null) => invoke<{ code: string; instructions: string | null }>("pair_taura", { paper, code });
+
+export interface Roots {
+  paper_root: string;
+  code_root: string;
+  /** "config" (set with taura config), "env" or "default". */
+  paper_from: string;
+  code_from: string;
+  /** taura is installed, so the folders can be changed. */
+  taura: boolean;
+}
+
+export const rootsGet = () => invoke<Roots>("roots_get");
+/** `folder` null goes back to the default. */
+export const rootsSet = (key: "paper_root" | "code_root", folder: string | null) => invoke<Roots>("roots_set", { key, folder });

@@ -98,6 +98,9 @@ const markerField = StateField.define<RangeSet<Dot>>({
 export class Editor {
   private view: EditorView;
   private states = new Map<string, EditorState>();
+  private wrap = new Compartment();
+  private wrapping = true;
+  private themeMode: "system" | "light" | "dark" = "system";
   private saved = new Map<string, string>();
   private dirty = new Set<string>();
   private theme = new Compartment();
@@ -111,7 +114,7 @@ export class Editor {
   constructor(parent: HTMLElement, private hooks: EditorHooks, private citations: Citations) {
     this.view = new EditorView({
       parent,
-      state: EditorState.create({ doc: "", extensions: [EditorState.readOnly.of(true), this.theme.of(themeFor(darkQuery.matches))] }),
+      state: EditorState.create({ doc: "", extensions: [EditorState.readOnly.of(true), this.theme.of(themeFor(this.isDark()))] }),
       dispatch: (tr, view) => {
         view.update([tr]);
         if (tr.docChanged && this.file) {
@@ -132,7 +135,7 @@ export class Editor {
         }
       },
     });
-    darkQuery.addEventListener("change", (e) => this.setDark(e.matches));
+    darkQuery.addEventListener("change", () => this.reconfigureAll(this.theme.reconfigure(themeFor(this.isDark()))));
   }
 
   private makeState(file: string, text: string): EditorState {
@@ -147,7 +150,7 @@ export class Editor {
       extensions: [
         basicSetup,
         StreamLanguage.define(stex),
-        EditorView.lineWrapping,
+        this.wrap.of(this.wrapping ? EditorView.lineWrapping : []),
         tex,
         lintGutter(),
         linter((view) => this.diagnostics(file, view), { delay: 400 }),
@@ -171,7 +174,7 @@ export class Editor {
         flashField,
         marksExtension,
         suggestingField.init(() => this.suggesting),
-        this.theme.of(themeFor(darkQuery.matches)),
+        this.theme.of(themeFor(this.isDark())),
         keymap.of([
           indentWithTab,
           { key: "Mod-s", preventDefault: true, run: () => (this.hooks.onSave(), true) },
@@ -238,12 +241,28 @@ export class Editor {
     this.hooks.onForwardSync(line.number, pos - line.from + 1);
   }
 
-  private setDark(dark: boolean) {
-    const effect = this.theme.reconfigure(themeFor(dark));
+  private isDark() {
+    return this.themeMode === "dark" || (this.themeMode === "system" && darkQuery.matches);
+  }
+
+  /** Applies a configuration change to the shown file and every loaded one. */
+  private reconfigureAll(effect: StateEffect<unknown>) {
     for (const [file, state] of this.states) {
       if (file !== this.file) this.states.set(file, state.update({ effects: effect }).state);
     }
     this.view.dispatch({ effects: effect });
+  }
+
+  /** Light or dark editor colours; "system" follows macOS. */
+  setTheme(mode: "system" | "light" | "dark") {
+    this.themeMode = mode;
+    this.reconfigureAll(this.theme.reconfigure(themeFor(this.isDark())));
+  }
+
+  /** Wraps long lines to the editor's width, or scrolls them sideways. */
+  setWrap(on: boolean) {
+    this.wrapping = on;
+    this.reconfigureAll(this.wrap.reconfigure(on ? EditorView.lineWrapping : []));
   }
 
   /** Forgets every open file, e.g. when switching projects. */
@@ -254,7 +273,7 @@ export class Editor {
     this.dirty.clear();
     this.file = null;
     this.view.setState(
-      EditorState.create({ doc: "", extensions: [EditorState.readOnly.of(true), this.theme.of(themeFor(darkQuery.matches))] }),
+      EditorState.create({ doc: "", extensions: [EditorState.readOnly.of(true), this.theme.of(themeFor(this.isDark()))] }),
     );
   }
 

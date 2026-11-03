@@ -29,14 +29,14 @@ fn yes() -> bool {
     true
 }
 
-/// Right-hand panels in View, with their shortcuts ⌘1…⌘8.
-const PANELS: &[(&str, &str)] = &[
-    ("pdf", "PDF"),
+/// Sidebar views in View, in the activity bar's order, with their shortcuts ⌘1…⌘8.
+const VIEWS: &[(&str, &str)] = &[
+    ("files", "Files and Outline"),
+    ("search", "Search"),
+    ("git", "Source Control"),
+    ("review", "Review"),
     ("suggestions", "Suggestions"),
     ("checks", "Checks"),
-    ("outline", "Outline"),
-    ("review", "Review"),
-    ("versions", "Versions"),
     ("claims", "Claims"),
     ("provenance", "Provenance"),
 ];
@@ -53,6 +53,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 
     let app_menu = SubmenuBuilder::new(app, "tuhi")
         .about(None)
+        .separator()
+        .item(&item("settings", "Settings…", Some("CmdOrCtrl+,"), true)?)
+        .item(&item("setup", "Set Up Tools…", None, true)?)
         .separator()
         .services()
         .separator()
@@ -81,6 +84,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .build()?;
 
     let file = SubmenuBuilder::new(app, "File")
+        .item(&item("new-project", "New Project…", Some("CmdOrCtrl+Shift+N"), true)?)
         .item(&item("open", "Open Folder…", Some("CmdOrCtrl+O"), true)?)
         .item(&recent)
         .item(&item("quick-open", "Go to File…", Some("CmdOrCtrl+P"), p)?)
@@ -106,6 +110,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .select_all()
         .separator()
         .item(&item("find", "Find…", Some("CmdOrCtrl+F"), p)?)
+        .item(&item("search", "Search in Paper…", Some("CmdOrCtrl+Shift+F"), p)?)
         .separator()
         .item(&CheckMenuItemBuilder::with_id("suggesting", "Suggesting Mode").checked(state.suggesting).enabled(p).accelerator("CmdOrCtrl+Shift+E").build(app)?)
         .item(&item("comment", "Comment on Selection…", Some("CmdOrCtrl+Alt+M"), p)?)
@@ -116,8 +121,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("sidebar", if state.sidebar { "Hide Sidebar" } else { "Show Sidebar" }, Some("CmdOrCtrl+Ctrl+S"), true)?)
         .item(&item("problems", if state.problems { "Hide Problems" } else { "Show Problems" }, Some("CmdOrCtrl+Shift+M"), p)?)
         .separator();
-    for (i, (id, label)) in PANELS.iter().enumerate() {
-        view = view.item(&item(&format!("panel:{id}"), label, Some(&format!("CmdOrCtrl+{}", i + 1)), p)?);
+    for (i, (id, label)) in VIEWS.iter().enumerate() {
+        view = view.item(&item(&format!("view:{id}"), label, Some(&format!("CmdOrCtrl+{}", i + 1)), p)?);
     }
     let view = view
         .separator()
@@ -129,6 +134,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     let paper = SubmenuBuilder::new(app, "Paper")
         .item(&item("compile", "Compile", Some("CmdOrCtrl+B"), p)?)
         .item(&item("checks", "Run Checks", None, p)?)
+        .separator()
+        .separator()
+        .item(&item("link-project", "Link to ruru and taura…", None, p)?)
+        .separator()
+        .item(&item("git-commit", "Commit…", Some("CmdOrCtrl+Alt+C"), p)?)
+        .item(&item("git-pull", "Pull", None, p)?)
+        .item(&item("git-push", "Push", None, p)?)
         .separator()
         .item(&item("snapshot", "Take Snapshot…", None, p)?)
         .item(&item("compare", "Compare Versions…", None, p)?)

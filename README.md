@@ -12,15 +12,56 @@ npm run tauri dev
 
 ## Using it
 
+### Setting up
+
+The first time tuhi opens, **Set up tuhi** checks for git, TeX, latexdiff, uv, ruru, taura and
+Claude Code (again any time from **tuhi ▸ Set Up Tools…**). uv, ruru and taura install with one
+click, from GitHub with `uv tool install`, as ruru's own installer does; copies installed
+another way (pipx, a checkout) are left alone. Anything that needs your password, like TeX, is
+shown as a command to copy into a terminal. With ruru installed and no library yet, it can
+create one (`ruru init`).
+
+**File ▸ New Project…** (⌘⇧N) starts a paper in `<paper folder>/<name>` (see Settings), from a template (article
+or IEEE journal, with `refs.bib`, a `.gitignore` and a first commit) or by cloning an Overleaf
+project's git URL (if Overleaf asks for a token, tuhi says how to set one up). Then, if ticked:
+
+- **Link to ruru**: `ruru project add <name>` with the paper's `.bib` and main `.tex`, so
+  citation completion, checks and claims work.
+- **Pair with taura**: creates the code repo `<code folder>/<name>` (or uses it if it exists),
+  runs `taura init` there, and gives the template the `\res` preamble. taura pairs the two by
+  name, so the code repo has the paper's name. For a cloned paper tuhi shows the lines to add.
+
+**Paper ▸ Link to ruru and taura…** does the same linking for the paper that's open.
+
+### Settings
+
+The gear at the bottom of the sidebar (or **tuhi ▸ Settings…**, ⌘,) holds tuhi's own
+preferences: light, dark or system theme; editor font size and line wrapping; whether ⌘S also
+compiles (⌘B always does); and whether TeX's underfull and overfull box warnings show in
+Problems. Per-paper settings (page limit, double-blind) stay in **Checks**.
+
+**Folders** sets where papers and code repos live (`~/overleaf` and `~/Desktop` by default).
+tuhi saves them with `taura config`, so taura in a terminal uses the same folders; New Project
+puts papers there, and taura pairs `<code folder>/<name>` with `<paper folder>/<name>`. They can
+be changed once taura is installed; `TAURA_PAPER_ROOT` and `TAURA_CODE_ROOT` still override them.
+
 - **File ▸ Open Folder…** (⌘O) opens a paper folder, e.g. `~/overleaf/<name>`; **Open Recent**
   lists the last ten. The file with `\documentclass` is treated as the main file and compiled
   straight away. The last folder reopens on launch.
 - Actions live in the menu bar: **File** (open, save, export, Show in Finder), **Edit**
-  (find, suggesting mode, comments, Ask Claude), **View** (sidebar, Problems, panels ⌘1–⌘8),
-  **Paper** (compile, checks, snapshots) and **Review** (import, draft, letter, diff).
-  **Help ▸ Keyboard Shortcuts** (⌘?) lists the shortcuts.
-- The sidebar (⌃⌘S) lists the files, marking the main file and unsaved ones, and the paper's
-  sections; click one to jump. **Go to File** (⌘P) filters the list; Return opens the first match.
+  (find, search, suggesting mode, comments, Ask Claude), **View** (sidebar views ⌘1–⌘8,
+  Problems), **Paper** (compile, checks, commit, pull, push, snapshots) and **Review** (import,
+  draft, letter, diff). **Help ▸ Keyboard Shortcuts** (⌘?) lists the shortcuts.
+- The window is the source and the PDF; everything else is in the sidebar on the left, one icon
+  each: **Files** (with the outline), **Search**, **Source control**, **Review**,
+  **Suggestions**, **Checks**, **Claims** and **Provenance**. Badges count what's waiting.
+  Clicking the selected icon hides the sidebar (also ⌃⌘S).
+- **Files** lists the files, marking the main file and unsaved ones; **Go to File** (⌘P)
+  filters the list and Return opens the first match. Below it the outline lists the sections;
+  click one to jump. **Counts** in its heading shows words, pages and budgets (see Section
+  budgets). Click either heading to fold it.
+- **Search** (⌘⇧F) finds text in every file of the paper, including unsaved edits, optionally
+  matching case or as a regular expression; click a result to select it in the editor.
 - **File ▸ Export ▸ PDF…** (⌘⇧P) saves a copy of the compiled PDF. **Source for Submission
   (.zip)…** zips the sources for a journal or arXiv: everything except git, tuhi's files, the
   response letters and TeX's build output, plus the compiled `.bbl`.
@@ -42,11 +83,11 @@ Like suggesting mode in Google Docs: nothing reaches the `.tex` until it's accep
   struck through and new text shown in green, and the file itself doesn't change. Backspace takes
   back what you just typed; ⌘Z undoes suggestions too.
 - **⌘⌥M** comments on the selected text. Comments are highlighted in the editor and threaded
-  in the **Suggestions** tab, where you can reply and resolve them.
+  under **Suggestions** in the sidebar, where you can reply and resolve them.
 - **⌘⌥K** asks Claude to suggest edits to the selection, with an optional instruction ("cut
   to 100 words", "make the claim more cautious"). Each edit comes back as a separate suggestion
   (dashed outline) with a short reason, and macros, citations and numbers are left alone.
-- The **Suggestions** tab lists every suggestion and comment: click one to jump to it, then
+- **Suggestions** lists every suggestion and comment: click one to jump to it, then
   **Accept** (writes it into the text; ⌘S to save) or **Reject**, or **Accept all**.
 
 Suggestions and comments are stored in `.tuhi/suggestions.json` in the paper's repo, with the
@@ -55,7 +96,7 @@ Overleaf pull). One whose text is gone is listed but can't be accepted.
 
 ### Checks before you submit
 
-The **Checks** tab runs after each compile (and when opened), on the text in the editor:
+**Checks** runs after each compile (and when opened), on the text in the editor:
 
 - **Checklist:** compiles cleanly; page count against the venue's limit (with or without the
   references, found from the PDF's References heading); anonymity for double-blind review
@@ -80,16 +121,26 @@ makes in the editor (⌘S to save and recompile); about $0.05.
 
 ### Section budgets
 
-The **Outline** tab lists the sections in reading order (following `\input`) with their words
+The outline under **Files** lists the sections in reading order (following `\input`) with their words
 and pages. Words count the text, including numbers, but not maths, tables or references; a
 section's count includes its subsections. Pages come from where each heading lands in the last
 PDF (SyncTeX), as fractions of a page. Set a word or page budget on any section, the abstract or
-the whole paper, and a bar shows how close each is: amber within 10%, red over. Budgets are
-saved in `.tuhi/settings.json`.
+the whole paper (hover a section for the boxes), and a bar shows how close each is: amber
+within 10%, red over. Budgets are saved in `.tuhi/settings.json`.
+
+### Source control
+
+**Source control** (⌘3) shows the branch, what changed since the last commit, and how many
+commits there are to push or pull. Click a file to see its changes; untick any to leave out of
+the commit. Write a message and **Commit** (⌘↩ in the message box, or **Paper ▸ Commit…**,
+⌘⌥C); unsaved edits are saved first. **Pull** takes the remote's commits when it can
+fast-forward (otherwise merge in a terminal), and **Push** sends yours, setting the upstream
+on the first push. tuhi uses the `git` CLI, so your credential helper signs in (for Overleaf,
+the token stored in the keychain); it never prompts.
 
 ### Versions
 
-The **Versions** tab keeps named snapshots such as "Submitted v1" or "Revision 1". A snapshot
+**Source control** also keeps named snapshots such as "Submitted v1" or "Revision 1". A snapshot
 records every file exactly as it is, saved or committed or not, as a git tag `tuhi/<name>`. It
 doesn't commit to your branch or change the index or working tree, and the tag stays local
 unless you push it with `--tags`. **Compare** any two versions, or one against the current text:
@@ -98,7 +149,7 @@ PDF. Deleting a snapshot removes only its tag.
 
 ### Reviewer comments
 
-The **Review** tab (next to PDF) tracks every reviewer comment to resolution.
+**Review** tracks every reviewer comment to resolution.
 
 - **Import PDF…** reads a reviewer's annotated PDF: highlights, strikeouts, sticky notes and
   their replies. Each becomes a card in the next reviewer group (R1, R2, …).
@@ -150,7 +201,7 @@ For papers paired with a code repo in taura, a dot in the editor's left gutter m
 - **amber ring**: taura flags the line, e.g. a typed number that matches a recorded result
 
 Click a dot for where it came from: the ledger result, the script and commit that produced it,
-the data, and when it was published (`taura trace`). The **Provenance** tab lists `taura check`
+the data, and when it was published (`taura trace`). **Provenance** in the sidebar lists `taura check`
 findings and what `taura publish` would change. tuhi only reads: it runs taura's CLI with
 `--json` after each compile and never writes to the ledger.
 
@@ -171,7 +222,7 @@ Without ruru, completion, hover and the missing-key check still work from the `.
 
 ### Claim check
 
-The **Claims** tab lists every sentence that cites something (`ruru claims`), with ruru's
+**Claims** lists every sentence that cites something (`ruru claims`), with ruru's
 verdict on each cited paper: supported, partial, unsupported, not found, background, or
 unchecked. **Needs attention** shows the unchecked, outdated and weak ones; weak ones also
 appear under Problems at their line.
@@ -206,6 +257,8 @@ TUHI_TEST_RURU_PAPER=~/overleaf/trust-align cargo test ruru_library -- --ignored
 TUHI_TEST_SUGGEST_PAPER=~/overleaf/trust-align cargo test suggests_edits -- --ignored --nocapture
 TUHI_TEST_EXPLAIN_PAPER=~/overleaf/trust-align cargo test explains -- --ignored --nocapture
 TUHI_TEST_GIT_PROJECT=~/overleaf/trust-align cargo test snapshot_and_diff -- --ignored --nocapture
+# new projects, ruru linking and taura config, in scratch folders (one at a time: they set env vars)
+cargo test setup:: -- --ignored --test-threads=1
 # judges one claim with Claude and records it in a copy of the library
 TUHI_TEST_CLAIMS_PAPER=~/overleaf/trust-align TUHI_RURU_LIBRARY=/tmp/papers-copy cargo test claims_judge -- --ignored --nocapture
 ```

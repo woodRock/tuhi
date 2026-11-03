@@ -53,6 +53,8 @@ export interface ReviewHooks {
   saveAll(): Promise<void>;
   /** Re-reads the project's file list, e.g. after writing the letter. */
   refreshFiles(): Promise<void>;
+  /** Comments still open or proposed in the current round, for the sidebar's badge. */
+  counted?(open: number): void;
 }
 
 interface Problem {
@@ -545,6 +547,7 @@ export class ReviewPanel {
     this.counts.textContent = cards.length
       ? (["open", "proposed", "accepted", "wontfix"] as Status[]).map((s) => `${tally(s)} ${STATUS_LABELS[s].toLowerCase()}`).join(" · ")
       : "";
+    this.hooks.counted?.(tally("open") + tally("proposed"));
 
     if (!this.root) {
       this.list.replaceChildren(el("p", "review-empty", "Open a paper first."));

@@ -12,6 +12,11 @@ import { newId, reanchor, withContext, type Mark } from "./marks";
 import { outline } from "./outline";
 import { OutlinePanel } from "./outline-panel";
 import { VersionsPanel } from "./versions-panel";
+import { GitPanel } from "./git-panel";
+import { SearchPanel } from "./search-panel";
+import { showNewProject, showSetup } from "./setup-sheets";
+import { DEFAULT_APP_SETTINGS, SettingsPanel, type AppSettings } from "./settings-panel";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SuggestionsPanel, type Entry } from "./suggestions-panel";
 import { Preview } from "./preview";
 import { ReviewPanel } from "./review";
@@ -33,8 +38,7 @@ const ui = {
   sidebarResize: $("sidebar-resize"),
   fileFilter: $<HTMLInputElement>("file-filter"),
   fileTree: $<HTMLUListElement>("file-tree"),
-  sectionsSection: $("sections-section"),
-  sectionList: $<HTMLUListElement>("section-list"),
+  activity: $("activity"),
   workspace: $("workspace"),
   empty: $("empty"),
   welcomeOpen: $<HTMLButtonElement>("welcome-open"),
@@ -50,24 +54,21 @@ const ui = {
   tabLog: $("tab-log"),
   problemsToggle: $("problems-toggle"),
   divider: $("divider"),
-  tabPdf: $("tab-pdf"),
-  tabReview: $("tab-review"),
   preview: $("preview"),
   review: $("review"),
-  tabProvenance: $("tab-provenance"),
+  reviewCount: $("review-count"),
   provenance: $("provenance"),
-  tabClaims: $("tab-claims"),
   claims: $("claims"),
-  tabSuggestions: $("tab-suggestions"),
   suggestions: $("suggestions"),
   suggestionCount: $("suggestion-count"),
-  tabChecks: $("tab-checks"),
   checks: $("checks"),
   checkCount: $("check-count"),
-  tabOutline: $("tab-outline"),
   outline: $("outline"),
-  tabVersions: $("tab-versions"),
+  outlineCounts: $<HTMLButtonElement>("outline-counts"),
   versions: $("versions"),
+  search: $("search"),
+  git: $("git"),
+  gitCount: $("git-count"),
 };
 
 const LAST_PROJECT = "tuhi.lastProject";
@@ -87,6 +88,13 @@ const store = (key: string, value: string) => {
     localStorage.setItem(key, value);
   } catch {}
 };
+
+/** App settings from the Settings view (⌘,); applied once the editor exists. */
+const APP_SETTINGS = "tuhi.settings";
+let appSettings: AppSettings = { ...DEFAULT_APP_SETTINGS };
+try {
+  appSettings = { ...DEFAULT_APP_SETTINGS, ...JSON.parse(stored(APP_SETTINGS) ?? "{}") };
+} catch {}
 
 let project: api.Project | null = null;
 let issues: api.Issue[] = [];
@@ -109,7 +117,7 @@ const citations = new Citations({
 });
 
 const editor = new Editor($("editor"), {
-  onSave: () => void saveAndCompile(),
+  onSave: () => void command("save"),
   onDirtyChange: () => dirtyChanged(),
   onForwardSync: (line, column) => void forwardSync(line, column),
   onMarkerClick: (marker, x, y) => void showProvenance(marker, x, y),
@@ -140,6 +148,7 @@ const reviewPanel = new ReviewPanel(ui.review, {
     project.files = fresh.files;
     renderFiles();
   },
+  counted: (open) => (ui.reviewCount.textContent = open ? String(open) : ""),
 });
 
 const claimsPanel = new ClaimsPanel(ui.claims, {
@@ -154,6 +163,13 @@ const claimsPanel = new ClaimsPanel(ui.claims, {
 const provenancePanel = new ProvenancePanel(ui.provenance, {
   jump: (file, line) => void openFile(file, line).catch(report),
   refresh: () => refreshProvenance(),
+  markers: async (taura) => {
+    if (!project) return [];
+    const texts = await paperTexts();
+    // The main file first, then the rest by name.
+    const files = [...texts.keys()].filter((f) => f.endsWith(".tex")).sort((a, b) => Number(b === project?.main) - Number(a === project?.main) || a.localeCompare(b));
+    return files.map((file) => ({ file, markers: markersFor(file, texts.get(file)!, taura) }));
+  },
 });
 
 function setStatus(text: string, error = false) {
@@ -187,8 +203,6 @@ async function loadProject(path: string) {
   ui.projectName.textContent = project.name;
   ui.fileFilter.value = "";
   pdfPath = null;
-  ui.sectionList.replaceChildren();
-  ui.sectionsSection.hidden = true;
   renderFiles();
   ui.compile.disabled = !project.main;
   ui.empty.hidden = true;
@@ -197,6 +211,7 @@ async function loadProject(path: string) {
   editor.reset();
   preview.clear();
   citations.set(null, "");
+  ruruProject = null;
   citeIssues = [];
   claimIssues = [];
   lintIssues = [];
@@ -205,6 +220,7 @@ async function loadProject(path: string) {
   await loadSidecar(project.root);
   await loadSettings(project.root);
   void versionsPanel.setProject(project.root);
+  void gitPanel.setProject(project.root);
   await reviewPanel.setProject(project.root, project.main);
   taura = null;
   void refreshProvenance();
@@ -409,7 +425,7 @@ async function askClaude(instruction: string) {
       marks.push({ id: newId(), kind: "suggestion", from, to, insert: edit.replace, author: "claude", created: stamp(), note: edit.why });
     }
     if (marks.length) editor.addMarks(sel.file, marks);
-    showSide("suggestions");
+    showView("suggestions");
     const cost = ` · $${result.cost_usd.toFixed(2)}`;
     setStatus(
       marks.length
@@ -442,7 +458,7 @@ const checksPanel = new ChecksPanel(ui.checks, {
     settings = next;
     if (project) void api.writeText(project.root, SETTINGS, JSON.stringify(settings, null, 2) + "\n").catch(report);
     void runChecks();
-    if (!ui.outline.hidden) void refreshOutline(true);
+    void refreshOutline(false);
   },
   rerun: () => void runChecks(),
 });
@@ -576,6 +592,38 @@ const versionsPanel = new VersionsPanel(ui.versions, {
       report(error);
     }
   },
+});
+
+// Source control and search
+
+const gitPanel = new GitPanel(
+  ui.git,
+  {
+    status: (text, error) => setStatus(text, error),
+    saveAll: async () => {
+      if (!(await saveDirty())) throw new Error("Couldn't save your changes");
+    },
+    open: (file) => void openFile(file).catch(report),
+    counted: (n) => (ui.gitCount.textContent = n ? String(n) : ""),
+  },
+  ui.versions,
+);
+
+/** Every text file's contents, from the editor where it's open. */
+async function paperTexts(): Promise<Map<string, string>> {
+  const texts = new Map<string, string>();
+  if (!project) return texts;
+  const { root, files } = project;
+  await Promise.all(files.map(async (f) => texts.set(f, editor.has(f) ? editor.text(f) : await api.readText(root, f).catch(() => ""))));
+  return texts;
+}
+
+const searchPanel = new SearchPanel(ui.search, {
+  texts: paperTexts,
+  open: (file, from, to) =>
+    void openFile(file)
+      .then(() => editor.select(from, to))
+      .catch(report),
 });
 
 // Compile errors explained
@@ -716,6 +764,7 @@ async function refreshFromDisk(paths: Set<string> | null) {
   }
   const reviewsChanged = manual || [...paths].some((p) => p.startsWith(".tuhi/reviews/") && p.endsWith(".json"));
   if (reviewsChanged) await reviewPanel.reload();
+  void gitPanel.reload(manual);
   if (manual) {
     void versionsPanel.reload();
     void claimsPanel.reload();
@@ -754,6 +803,13 @@ async function saveAndCompile() {
   if (await saveDirty()) await runCompile();
 }
 
+/** ⌘S: saves, and compiles too unless that's turned off in Settings. */
+async function saveFiles() {
+  if (!(await saveDirty())) return;
+  if (appSettings.compileOnSave) await runCompile();
+  else setStatus("Saved");
+}
+
 async function runCompile() {
   if (!project?.main) return;
   // A save during a compile queues one more run rather than starting a second process.
@@ -774,7 +830,8 @@ async function runCompile() {
       syncMenu();
     }
     showIssues(result.issues, result.log);
-    void refreshSections();
+    void refreshOutline(outlineCounts());
+    void gitPanel.reload(false);
     void refreshProvenance();
     void refreshCitations(true);
     void claimsPanel.reload();
@@ -825,16 +882,32 @@ async function inverseSync(page: number, x: number, y: number) {
 
 let provenanceRun = 0;
 
+/** A report is running; asking again meanwhile runs one more afterwards, not one per ask. */
+let provenanceBusy = false;
+let provenanceAgain = false;
+
 async function refreshProvenance() {
   if (!project) return;
+  if (provenanceBusy) {
+    provenanceAgain = true;
+    return;
+  }
   const root = project.root;
   const run = ++provenanceRun;
   if (!taura) provenancePanel.set(null, true);
   let error: string | undefined;
-  const next = await api.tauraReport(root).catch((e) => {
-    error = String(e);
-    return null;
-  });
+  provenanceBusy = true;
+  const next = await api
+    .tauraReport(root)
+    .catch((e) => {
+      error = String(e);
+      return null;
+    })
+    .finally(() => (provenanceBusy = false));
+  if (provenanceAgain) {
+    provenanceAgain = false;
+    return refreshProvenance();
+  }
   if (run !== provenanceRun || project?.root !== root) return;
   taura = next;
   provenancePanel.set(taura, false, error);
@@ -881,6 +954,8 @@ async function showProvenance(marker: Marker, x: number, y: number) {
 // Citations (the .bib and ruru)
 
 let citationRun = 0;
+/** The ruru project the open paper belongs to, from the last citation lookup. */
+let ruruProject: string | null = null;
 
 /** Reloads the .bib entries and ruru library; after a compile also runs `ruru check`. */
 async function refreshCitations(check: boolean) {
@@ -893,6 +968,7 @@ async function refreshCitations(check: boolean) {
   ]);
   if (run !== citationRun || project?.root !== root) return;
   citations.set(library, main ? `${root}/${main}` : root);
+  ruruProject = library?.project ?? null;
   editor.relint();
   if (report !== undefined) {
     citeIssues = report && library ? checkIssues(report, library) : [];
@@ -950,7 +1026,8 @@ function weakClaims(doc: api.ClaimsDocument): api.Issue[] {
 function showIssues(next: api.Issue[], log: string) {
   compileIssues = next;
   compileLog = log;
-  issues = [...next, ...citeIssues, ...claimIssues, ...lintIssues];
+  const boxes = /^(Underfull|Overfull) \\[hv]box/;
+  issues = [...next.filter((i) => appSettings.boxWarnings || !boxes.test(i.message)), ...citeIssues, ...claimIssues, ...lintIssues];
   ui.log.textContent = log;
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.filter((i) => i.severity === "warning").length;
@@ -1030,33 +1107,24 @@ function selectTab(log: boolean) {
   setProblems(true);
 }
 
-type Side = "pdf" | "review" | "provenance" | "claims" | "suggestions" | "checks" | "outline" | "versions";
+type View = "files" | "search" | "git" | "review" | "suggestions" | "checks" | "claims" | "provenance" | "settings";
 
-const sides: Record<Side, { tab: HTMLElement; pane: HTMLElement }> = {
-  pdf: { tab: ui.tabPdf, pane: ui.preview },
-  suggestions: { tab: ui.tabSuggestions, pane: ui.suggestions },
-  checks: { tab: ui.tabChecks, pane: ui.checks },
-  outline: { tab: ui.tabOutline, pane: ui.outline },
-  review: { tab: ui.tabReview, pane: ui.review },
-  versions: { tab: ui.tabVersions, pane: ui.versions },
-  claims: { tab: ui.tabClaims, pane: ui.claims },
-  provenance: { tab: ui.tabProvenance, pane: ui.provenance },
-};
+const VIEW = "tuhi.view";
+let view: View = "files";
 
-function showSide(side: Side) {
-  for (const [name, { tab, pane }] of Object.entries(sides)) {
-    tab.classList.toggle("active", name === side);
-    pane.hidden = name !== side;
-  }
-  sides[side].tab.scrollIntoView({ block: "nearest", inline: "nearest" });
-}
-
-/** Shows a panel and brings what it lists up to date. */
-function openPanel(side: Side) {
-  showSide(side);
-  if (side === "outline") void refreshOutline(true);
-  else if (side === "versions") void versionsPanel.reload();
-  else if (side === "checks") void runChecks();
+/** Shows a sidebar view (opening the sidebar) and brings what it lists up to date. */
+function showView(next: View) {
+  view = next;
+  store(VIEW, next);
+  document.body.dataset.view = next;
+  for (const item of ui.activity.querySelectorAll<HTMLElement>(".activity-item")) item.classList.toggle("active", item.dataset.view === next);
+  for (const pane of ui.sidebar.querySelectorAll<HTMLElement>(".view")) pane.hidden = pane.id !== `view-${next}`;
+  if (!sidebarOpen()) setSidebar(true);
+  if (next === "git") {
+    void gitPanel.reload(true);
+    void versionsPanel.reload();
+  } else if (next === "checks") void runChecks();
+  else if (next === "files") void refreshOutline(outlineCounts());
 }
 
 // Sidebar: files and sections
@@ -1149,34 +1217,6 @@ function renderFiles() {
     if (!hidden) rows.push(fileRow(file, parts.at(-1)!, parts.length - 1));
   }
   ui.fileTree.replaceChildren(...rows);
-}
-
-let sectionsRun = 0;
-
-/** The sections list in the sidebar, from the editor's text. */
-async function refreshSections() {
-  if (!project?.main) return;
-  const { root, main, files } = project;
-  const run = ++sectionsRun;
-  const texts = new Map<string, string>();
-  await Promise.all(
-    files
-      .filter((f) => f.endsWith(".tex"))
-      .map(async (f) => texts.set(f, editor.has(f) ? editor.text(f) : await api.readText(root, f).catch(() => ""))),
-  );
-  if (run !== sectionsRun || project?.root !== root) return;
-  const { sections } = outline(main, texts);
-  ui.sectionsSection.hidden = !sections.length;
-  ui.sectionList.replaceChildren(
-    ...sections.map((s) => {
-      const li = document.createElement("li");
-      li.className = `tree-section level-${s.level}`;
-      li.textContent = s.level === 0 ? "Abstract" : s.title;
-      li.title = `${s.file}:${s.line} · ${s.words} words`;
-      li.addEventListener("click", () => void openFile(s.file, s.line).catch(report));
-      return li;
-    }),
-  );
 }
 
 function setSidebar(open: boolean) {
@@ -1287,7 +1327,7 @@ async function command(id: string) {
     if (path) await loadProject(path);
     return;
   }
-  if (id.startsWith("panel:")) return openPanel(id.slice(6) as Side);
+  if (id.startsWith("view:")) return showView(id.slice(5) as View);
   switch (id) {
     case "open":
       return chooseProject();
@@ -1300,14 +1340,21 @@ async function command(id: string) {
       return ui.shortcutsClose.focus();
     case "sidebar":
       return setSidebar(!sidebarOpen());
+    case "setup":
+      return showSetup(() => store(SETUP_DONE, "1"));
+    case "settings":
+      return showView("settings");
+    case "new-project":
+      return showNewProject({ open: (path) => loadProject(path) });
   }
   if (!project) return;
   switch (id) {
     case "quick-open":
-      setSidebar(true);
+      showView("files");
       ui.fileFilter.focus();
       return ui.fileFilter.select();
     case "save":
+      return saveFiles();
     case "compile":
       return saveAndCompile();
     case "refresh":
@@ -1326,42 +1373,59 @@ async function command(id: string) {
       return setSuggesting(!editor.isSuggesting());
     case "comment":
     case "ask-claude":
-      showSide("suggestions");
+      showView("suggestions");
       return suggestionsPanel.openComposer(id === "comment" ? "comment" : "claude");
     case "problems":
       return setProblems(ui.problems.classList.contains("collapsed"));
     case "sync":
       return editor.syncCursor();
     case "checks":
-      return openPanel("checks");
+      return showView("checks");
+    case "link-project":
+      return showNewProject(
+        { open: (path) => loadProject(path) },
+        { root: project.root, name: project.name, ruru: ruruProject, taura: taura !== null },
+      );
+    case "search":
+      showView("search");
+      return searchPanel.focus(editor.selection()?.text.split("\n")[0] || undefined);
+    case "git-commit":
+      showView("git");
+      return gitPanel.focusMessage();
+    case "git-pull":
+      showView("git");
+      return gitPanel.pull();
+    case "git-push":
+      showView("git");
+      return gitPanel.push();
     case "snapshot":
-      openPanel("versions");
+      showView("git");
       return versionsPanel.focusName();
     case "compare":
     case "export-diff":
-      openPanel("versions");
+      showView("git");
       return versionsPanel.focusCompare();
     case "review-import":
-      showSide("review");
+      showView("review");
       return reviewPanel.importPdf();
     case "review-paste":
-      showSide("review");
+      showView("review");
       return reviewPanel.showPaste();
     case "review-new":
-      showSide("review");
+      showView("review");
       return reviewPanel.startRound();
     case "review-draft-all":
-      showSide("review");
+      showView("review");
       return reviewPanel.draftAll();
     case "review-check":
-      showSide("review");
+      showView("review");
       return reviewPanel.finishing("check");
     case "review-letter":
     case "export-letter":
-      showSide("review");
+      showView("review");
       return reviewPanel.finishing("letter");
     case "review-diff":
-      showSide("review");
+      showView("review");
       return reviewPanel.finishing("diff");
   }
 }
@@ -1372,12 +1436,20 @@ void listen<string>("menu", ({ payload }) => void command(payload).catch(report)
 
 // Wiring
 
-for (const [name, { tab }] of Object.entries(sides)) tab.addEventListener("click", () => openPanel(name as Side));
+// Clicking the selected icon hides the sidebar; any other shows its view.
+for (const item of ui.activity.querySelectorAll<HTMLElement>(".activity-item")) {
+  item.addEventListener("click", () => {
+    const next = item.dataset.view as View;
+    if (next === view && sidebarOpen()) setSidebar(false);
+    else showView(next);
+  });
+}
 ui.modeEdit.addEventListener("click", () => setSuggesting(false));
 ui.modeSuggest.addEventListener("click", () => setSuggesting(true));
 ui.compile.addEventListener("click", () => void saveAndCompile());
 ui.sidebarToggle.addEventListener("click", run("sidebar"));
 ui.welcomeOpen.addEventListener("click", run("open"));
+$("welcome-new").addEventListener("click", run("new-project"));
 ui.shortcutsClose.addEventListener("click", () => (ui.shortcuts.hidden = true));
 ui.shortcuts.addEventListener("click", (e) => {
   if (e.target === ui.shortcuts) ui.shortcuts.hidden = true;
@@ -1415,6 +1487,9 @@ document.addEventListener("keydown", (event) => {
   } else if (mod && event.shiftKey && event.key.toLowerCase() === "r") {
     event.preventDefault();
     void command("refresh").catch(report);
+  } else if (mod && event.shiftKey && event.key.toLowerCase() === "n") {
+    event.preventDefault();
+    void command("new-project").catch(report);
   } else if (mod && !event.shiftKey && event.key === "o") {
     event.preventDefault();
     void command("open").catch(report);
@@ -1443,7 +1518,7 @@ ui.sidebarResize.addEventListener("pointerdown", (event) => {
   ui.sidebarResize.setPointerCapture(event.pointerId);
   document.body.classList.add("resizing");
   const move = (e: PointerEvent) => {
-    const width = Math.min(420, Math.max(160, e.clientX));
+    const width = Math.min(600, Math.max(200, e.clientX - ui.sidebar.getBoundingClientRect().left));
     document.body.style.setProperty("--sidebar-width", `${width}px`);
   };
   ui.sidebarResize.addEventListener("pointermove", move);
@@ -1458,18 +1533,70 @@ ui.sidebarResize.addEventListener("pointerdown", (event) => {
   );
 });
 
-// Files and Sections fold away under their headings.
+// The outline is for getting around; word and page counts are shown only when asked for.
+const OUTLINE_COUNTS = "tuhi.outlineCounts";
+const outlineCounts = () => ui.outline.classList.contains("counts");
+
+function setOutlineCounts(on: boolean) {
+  ui.outline.classList.toggle("counts", on);
+  ui.outlineCounts.classList.toggle("on", on);
+  store(OUTLINE_COUNTS, on ? "1" : "0");
+  if (on) void refreshOutline(true);
+}
+
+ui.outlineCounts.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setOutlineCounts(!outlineCounts());
+});
+ui.outline.classList.toggle("counts", stored(OUTLINE_COUNTS) === "1");
+ui.outlineCounts.classList.toggle("on", outlineCounts());
+
+// Files and Outline fold away under their headings.
 for (const section of document.querySelectorAll<HTMLElement>(".sidebar-section")) {
   const key = `tuhi.folded.${section.id}`;
   section.classList.toggle("folded", stored(key) === "1");
   section.querySelector(".section-toggle")!.addEventListener("click", () => store(key, section.classList.toggle("folded") ? "1" : "0"));
 }
 
+// App settings (Settings view, ⌘,)
+
+function applySettings(next: AppSettings) {
+  const boxesChanged = next.boxWarnings !== appSettings.boxWarnings;
+  appSettings = next;
+  store(APP_SETTINGS, JSON.stringify(next));
+  if (next.theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = next.theme;
+  editor.setTheme(next.theme);
+  editor.setWrap(next.wrap);
+  document.documentElement.style.setProperty("--editor-font-size", `${next.fontSize}px`);
+  if (boxesChanged) showIssues(compileIssues, compileLog);
+  // The title bar and native controls follow too (only inside the app).
+  try {
+    void getCurrentWindow()
+      .setTheme(next.theme === "system" ? null : next.theme)
+      .catch(() => {});
+  } catch {}
+}
+
+new SettingsPanel($("settings"), appSettings, {
+  changed: applySettings,
+  setupTools: () => void command("setup"),
+  shortcuts: () => void command("shortcuts"),
+});
+applySettings(appSettings);
+
+const savedView = stored(VIEW) as View | null;
+if (savedView && document.getElementById(`view-${savedView}`)) showView(savedView);
+
 const width = stored(SIDEBAR_WIDTH);
 if (width) document.body.style.setProperty("--sidebar-width", width);
 if (stored(SIDEBAR) === "0") document.body.classList.add("sidebar-hidden");
 renderRecent();
 syncMenu();
+
+// The first time tuhi opens, offer to set up TeX, ruru and taura.
+const SETUP_DONE = "tuhi.setupDone";
+if (stored(SETUP_DONE) !== "1") showSetup(() => store(SETUP_DONE, "1"));
 
 const lastProject = stored(LAST_PROJECT);
 if (lastProject) void loadProject(lastProject).catch(report);
