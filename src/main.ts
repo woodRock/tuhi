@@ -698,6 +698,17 @@ void listen<{ root: string; paths: string[] }>("project-changed", ({ payload }) 
   }, 500);
 });
 
+// A commit, pull or checkout made elsewhere: only the repo's state changed, not the files.
+let repoTimer = 0;
+void listen<string>("repo-changed", ({ payload }) => {
+  if (payload !== project?.root) return;
+  clearTimeout(repoTimer);
+  repoTimer = window.setTimeout(() => {
+    void gitPanel.reload(false);
+    void versionsPanel.reload();
+  }, 500);
+});
+
 /**
  * Brings tuhi up to date with files edited elsewhere: open files, the file list, suggestions,
  * reviews and settings, then recompiles if the paper changed. `paths` null means check

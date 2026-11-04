@@ -43,7 +43,9 @@ fn run(cmd: &mut Command) -> Result<String, String> {
 }
 
 pub fn status(root: &Path) -> Result<Status, String> {
-    let Ok(out) = run(git(root)?.args(["status", "--porcelain=v1", "-b", "-z", "--untracked-files=all"])) else {
+    // --no-optional-locks: status mustn't rewrite the index, or the watcher would see that as a
+    // commit and ask for status again.
+    let Ok(out) = run(git(root)?.args(["--no-optional-locks", "status", "--porcelain=v1", "-b", "-z", "--untracked-files=all"])) else {
         return Ok(Status::default());
     };
     let mut status = parse_status(&out);
