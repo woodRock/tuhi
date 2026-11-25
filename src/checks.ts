@@ -94,7 +94,7 @@ const FILL = "\u00ad";
 
 // Commands whose arguments aren't prose.
 const NON_PROSE = new Set(
-  "label ref eqref cref Cref autoref pageref nameref vref cite citep citet citealp citeauthor citeyear parencite textcite autocite footcite nocite input include subfile includegraphics bibliography bibliographystyle addbibresource url href documentclass usepackage RequirePackage begin end res newcommand renewcommand providecommand DeclareMathOperator newenvironment renewenvironment def let hspace vspace setlength addtolength setcounter fontsize color textcolor definecolor pagecolor colorbox hypersetup graphicspath lstinputlisting bibitem resizebox scalebox rule raisebox".split(" "),
+  "label ref eqref cref Cref autoref pageref nameref vref cite citep citet citealp citeauthor citeyear parencite textcite autocite footcite nocite input include subfile includegraphics bibliography bibliographystyle addbibresource url href documentclass usepackage RequirePackage begin end res newcommand renewcommand providecommand DeclareMathOperator newenvironment renewenvironment def let hspace vspace setlength addtolength setcounter fontsize color textcolor definecolor pagecolor colorbox hypersetup graphicspath lstinputlisting texttt bibitem resizebox scalebox rule raisebox".split(" "),
 );
 const MATH_ENVS = /^(equation|align|alignat|gather|multline|flalign|eqnarray|math|displaymath|split|IEEEeqnarray|tikzpicture|verbatim|lstlisting|minted|comment)\*?$/;
 const ACCENTS: Record<string, Record<string, string>> = {
@@ -307,6 +307,8 @@ export function lint(main: string, texts: Map<string, string>): Finding[] {
 }
 
 const KNOWN = new Set("PDF URL URLs HTML CSV JSON API CPU GPU RAM ID OK TV DNA RNA USA UK EU IEEE ACM ISO SI CC BY TODO FIXME TBD XXX NB".split(" "));
+// Also well known enough to need no spelling out: everyday terms, units and brand names.
+for (const name of "XML TPU ROM PC USB UN AI IT FAQ CEO AM PM BC AD KB MB GB TB PB NVIDIA AMD RTX GTX IBM AWS BERT GPT".split(" ")) KNOWN.add(name);
 const ROMAN = /^[IVXLCDM]+$/;
 const ACRONYM = /(?<![\p{L}\d\-\/])([A-Z][A-Z0-9]*(?:[-\/][A-Z0-9]+)*)(s?)(?![\p{L}\d])/gu;
 // Where an acronym's use doesn't count as first use: headings, the abstract and keywords
@@ -354,10 +356,7 @@ function acronyms(docs: Map<string, Doc>, order: Segment[]): Finding[] {
       const at = seg.from + m.index!;
       if ((name.match(/[A-Z]/g) ?? []).length < 2 || ROMAN.test(name) || KNOWN.has(name) || name.length > 8) continue;
       const hit = { doc, at, order: index++, raw: name, seg };
-      // "(ABC)" right after words is a definition.
-      const before = doc.prose.slice(Math.max(0, at - 2), at);
-      const after = doc.prose.slice(at + m[0].length, at + m[0].length + 2);
-      if (/\(\s?$/.test(before) && /^\s?\)/.test(after) && /\p{L}/u.test(doc.prose.slice(Math.max(0, at - 30), at - 1))) {
+      if (definesAt(doc.prose, at, m[0].length, name)) {
         defs.set(name, [...(defs.get(name) ?? []), hit]);
       } else if (!isQuiet(doc, at, seg)) {
         uses.set(name, [...(uses.get(name) ?? []), hit]);
@@ -381,9 +380,12 @@ function acronyms(docs: Map<string, Doc>, order: Segment[]): Finding[] {
       }
       continue;
     }
-    if (firstDef && used.length && used[0].order < firstDef.order) {
+    // A use earlier in the sentence that spells it out ("ONNX Runtime runs the Open Neural
+    // Network Exchange (ONNX) format") is fine.
+    const early = used.filter((u) => u.order < firstDef.order && !sameSentence(u, firstDef));
+    if (early.length) {
       const where = place(firstDef.doc, firstDef.at);
-      out.push({ ...place(used[0].doc, used[0].at), severity: "warning", group: "Acronyms", message: `${name} is used before it's defined (${where.file}:${where.line})` });
+      out.push({ ...place(early[0].doc, early[0].at), severity: "warning", group: "Acronyms", message: `${name} is used before it's defined (${where.file}:${where.line})` });
     }
     for (const again of bodyDefs.slice(1)) {
       const first = place(firstDef.doc, firstDef.at);
@@ -394,6 +396,44 @@ function acronyms(docs: Map<string, Doc>, order: Segment[]): Finding[] {
     }
   }
   return out;
+}
+
+/**
+ * Whether the acronym at `at` is spelled out where it stands: "words (ABC)", "words (ABCs; …)",
+ * or the other way round, "ABC (a b c)" or "ABC number (the a b c)", when the words in
+ * brackets start with most of its letters, in order.
+ */
+function definesAt(prose: string, at: number, length: number, name: string): boolean {
+  const before = prose.slice(Math.max(0, at - 2), at);
+  const after = prose.slice(at + length, at + length + 2);
+  if (/\(\s?$/.test(before) && /^\s?[),;]/.test(after) && /\p{L}/u.test(prose.slice(Math.max(0, at - 30), at - 1))) return true;
+  // A few lower-case words between the acronym and the brackets ("the IRD number (…)").
+  const tail = /^(?:\s+[\p{Ll}\u00ad-]+){0,4}\s*\(([^()]{3,200})\)/u.exec(prose.slice(at + length, at + length + 260));
+  return !!tail && spellsOut(tail[1], name);
+}
+
+/** Whether the words start with enough of the acronym's letters, in order, its first among them. */
+function spellsOut(words: string, name: string): boolean {
+  const letters = name.replace(/[^A-Z]/g, "");
+  if (/^\s*(?:e\.?\s?g|i\.?\s?e|see|cf)\b/i.test(words)) return false;
+  const initials = [...words.replaceAll(FILL, "").matchAll(/\p{L}+/gu)].map((w) => w[0][0].toUpperCase());
+  if (initials.length < 2 || !initials.includes(letters[0])) return false;
+  let found = 0;
+  let k = 0;
+  for (const letter of letters) {
+    const next = initials.indexOf(letter, k);
+    if (next === -1) continue;
+    found++;
+    k = next + 1;
+  }
+  return found >= Math.max(2, Math.ceil(letters.length * 0.6));
+}
+
+/** Whether two places in one file fall in the same sentence. */
+function sameSentence(a: { doc: Doc; at: number }, b: { doc: Doc; at: number }): boolean {
+  if (a.doc !== b.doc) return false;
+  const between = a.doc.prose.slice(Math.min(a.at, b.at), Math.max(a.at, b.at));
+  return !/[.!?][)'"]?\s+[\p{Lu}\d]|\n[ \t]*\n/u.test(between);
 }
 
 // British and American spellings of the same word; -ise/-ize and -yse/-yze are found by rule.
